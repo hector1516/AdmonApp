@@ -1,73 +1,103 @@
 <script>
-  import { onMount } from 'svelte';
-  import { Router, Route, Link, navigate } from 'svelte-routing';
-  import { auth } from '$lib/stores/auth.js';
-  import Login from './pages/Login.svelte';
-  import Dashboard from './pages/Dashboard.svelte';
-  import Cotizaciones from './pages/Cotizaciones.svelte';
-  import Telegram from './pages/Telegram.svelte';
-  import Config from './pages/Config.svelte';
+	import { onMount } from 'svelte';
+	import { Router, Route, Link, navigate } from 'svelte-routing';
+	import { auth } from '$lib/stores/auth.js';
+	import { onlinePing } from '$lib/stores/online.js';
+	import SyncHeader from './components/SyncHeader.svelte';
+	import Login from './pages/Login.svelte';
+	import Dashboard from './pages/Dashboard.svelte';
+	import Cotizaciones from './pages/Cotizaciones.svelte';
+	import Usuarios from './pages/Usuarios.svelte';
+	import Telegram from './pages/Telegram.svelte';
+	import Config from './pages/Config.svelte';
 
-  onMount(() => {
-    auth.init();
-    // Sin sesión y fuera de /login -> redirigir al login
-    if (!auth.isLoggedIn() && window.location.pathname !== '/login') {
-      navigate('/login', { replace: true });
-    }
-  });
+	let ready = false;
+	let splashDone = false;
+	let splashMsg = '';
+	let splashProgress = 0;
 
-  function logout() {
-    auth.logout();
-    navigate('/login', { replace: true });
-  }
+	const splashMessages = [
+		'💻 Inicializando matriz de datos cuánticos...',
+		'🚀 Calibrando condensadores de flujo...',
+		'☕ Convirtiendo café en líneas de código...',
+		'🤖 Entrenando a los duendes del servidor...',
+		'📡 Alineando satélites geosíncronos de ECCSA...',
+		'🔑 Desencriptando algoritmos de acceso...',
+		'⚙️ Alineando los engranes del servidor de bases de datos...'
+	];
+
+	onMount(async () => {
+		// Splash corto con logo Admon
+		const msgs = [...splashMessages].sort(() => Math.random() - 0.5).slice(0, 2);
+		for (let i = 0; i < msgs.length; i++) {
+			splashMsg = msgs[i];
+			splashProgress = ((i + 1) / msgs.length) * 100;
+			await new Promise((r) => setTimeout(r, 800));
+		}
+		splashDone = true;
+
+		auth.init();
+		if (!auth.isLoggedIn() && window.location.pathname !== '/login') {
+			navigate('/login', { replace: true });
+		}
+		ready = true;
+		onlinePing().catch(() => {});
+	});
+
+	function logout() {
+		auth.logout();
+		navigate('/login', { replace: true });
+	}
 </script>
 
-<div class="min-h-screen bg-dark text-text">
-  <!-- Barra superior con logo -->
-  <header class="flex items-center gap-3 px-4 py-2 border-b border-surface sticky top-0 bg-dark z-10">
-    <img src="/admon_logo.png" alt="Admon" class="rounded-lg" style="height: 32px; width: 32px; object-fit: cover;" />
-    <span class="font-bold text-text">Admon <span class="text-muted font-normal">· ECCSA</span></span>
-  </header>
+{#if !splashDone}
+	<div class="splash">
+		<img class="splash-logo-img" src="/admon_logo.png" alt="Admon ECCSA" />
+		<div class="splash-title">Admon</div>
+		<div class="splash-msg">{splashMsg}</div>
+		<div class="splash-bar">
+			<div class="splash-bar-fill" style="width:{splashProgress}%"></div>
+		</div>
+	</div>
+{:else if ready}
+	{#if $auth.user}
+		<SyncHeader />
+	{/if}
 
-  <Router>
-    <Route path="/login" component={Login} />
-    <Route path="/">
-      {#if auth.isLoggedIn()}
-        <Dashboard />
-      {:else}
-        <Login />
-      {/if}
-    </Route>
-    <Route path="/dashboard" component={Dashboard} />
-    <Route path="/cotizaciones_materiales" component={Cotizaciones} />
-    <Route path="/telegram" component={Telegram} />
-    <Route path="/config" component={Config} />
-  </Router>
+	<div style="padding-top: {$auth.user ? 'calc(3.8rem + env(safe-area-inset-top))' : '0'}">
+		<Router>
+			<Route path="/login" component={Login} />
+			<Route path="/">
+				{#if auth.isLoggedIn()}
+					<Dashboard />
+				{:else}
+					<Login />
+				{/if}
+			</Route>
+			<Route path="/dashboard" component={Dashboard} />
+			<Route path="/cotizaciones_materiales" component={Cotizaciones} />
+			<Route path="/usuarios" component={Usuarios} />
+			<Route path="/telegram" component={Telegram} />
+			<Route path="/config" component={Config} />
+		</Router>
+		<div class="version-badge">Admon v1.0.0</div>
+	</div>
 
-  <!-- Nav inferior estilo Field -->
-  <nav class="fixed bottom-0 left-0 right-0 bg-dark border-t border-surface/50 flex justify-around py-2">
-    <Link to="/dashboard" class="nav-link">📊<span class="nav-label">Panel</span></Link>
-    <Link to="/cotizaciones_materiales" class="nav-link">📦<span class="nav-label">Cotiz.</span></Link>
-    <Link to="/telegram" class="nav-link">📱<span class="nav-label">Telegram</span></Link>
-    <Link to="/config" class="nav-link">⚙️<span class="nav-label">Config</span></Link>
-    <button on:click={logout} class="nav-link" title="Cerrar sesión">🚪<span class="nav-label">Salir</span></button>
-  </nav>
-</div>
-
-<style>
-  .nav-link {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    font-size: 1.1rem;
-    color: #F8FAFC;
-    text-decoration: none;
-    background: none;
-    border: none;
-    cursor: pointer;
-  }
-  .nav-label {
-    font-size: 0.65rem;
-    color: #64748B;
-  }
-</style>
+	{#if $auth.user}
+		<nav class="bottom-nav">
+			<Link to="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Panel</span></Link>
+			<Link to="/cotizaciones_materiales" class="nav-item"><span class="nav-icon">📦</span><span>Cotiz.</span></Link>
+			{#if $auth.user.acceso_usuarios}
+				<Link to="/usuarios" class="nav-item"><span class="nav-icon">👥</span><span>Usuarios</span></Link>
+			{/if}
+			<Link to="/telegram" class="nav-item"><span class="nav-icon">📱</span><span>Telegram</span></Link>
+			<Link to="/config" class="nav-item"><span class="nav-icon">⚙️</span><span>Config</span></Link>
+			<button on:click={logout} class="nav-item" title="Cerrar sesión"><span class="nav-icon">🚪</span><span>Salir</span></button>
+		</nav>
+	{/if}
+{:else}
+	<div class="splash">
+		<img class="splash-logo-img" src="/admon_logo.png" alt="Admon ECCSA" />
+		<div class="splash-title">Admon</div>
+	</div>
+{/if}

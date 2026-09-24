@@ -1,44 +1,45 @@
 <script>
-  import { onMount } from 'svelte';
-  import { navigate } from 'svelte-routing';
-  import { auth } from '$lib/stores/auth.js';
+	import { onMount } from 'svelte';
+	import { navigate } from 'svelte-routing';
+	import { auth } from '$lib/stores/auth.js';
 
-  onMount(() => {
-    if (!auth.isLoggedIn()) navigate('/login', { replace: true });
-  });
+	onMount(() => {
+		if (!auth.isLoggedIn()) navigate('/login', { replace: true });
+	});
 </script>
 
-<div class="p-6 pb-24">
-  <h1 class="text-2xl font-bold text-text mb-4">📱 Telegram - Alertas</h1>
+<div class="page">
+	<div class="header">
+		<h1>📱 Telegram - Alertas</h1>
+	</div>
 
-  <div class="surface p-4 rounded-lg mb-6">
-    <h3 class="font-semibold text-text mb-2">Configuración del Bot</h3>
-    <p class="text-muted">
-      El bot de Telegram está configurado y enviará alertas automáticas.
-    </p>
+	<div class="card" style="margin-bottom: 0.75rem;">
+		<h3 style="margin: 0 0 0.5rem; font-size: 0.95rem;">Configuración del Bot</h3>
+		<p style="color: var(--color-text-muted); font-size: 0.9rem; margin: 0 0 0.75rem;">
+			El bot de Telegram está configurado y enviará alertas automáticas.
+		</p>
+		<div class="grid-2">
+			<div>
+				<span style="color: var(--color-text-muted); font-size: 0.85rem;">Token: </span>
+				<span class="badge badge-success">configurado</span>
+			</div>
+			<div>
+				<span style="color: var(--color-text-muted); font-size: 0.85rem;">Chat ID: </span>
+				<span class="badge badge-success">configurado</span>
+			</div>
+		</div>
+	</div>
 
-    <div class="grid grid-cols-2 gap-2 mt-4">
-      <div>
-        <span class="text-muted">Token: </span>
-        <span class="text-xs text-primary break-all">configured</span>
-      </div>
-      <div>
-        <span class="text-muted">Chat ID: </span>
-        <span class="text-xs text-primary break-all">configured</span>
-      </div>
-    </div>
-  </div>
+	<div class="card">
+		<h3 style="margin: 0 0 0.75rem; font-size: 0.95rem;">Alertas activas</h3>
+		<div class="list">
+			<div class="list-card" style="cursor: default;"><span>📈 Tipo de cambio USD/MXN</span><span class="badge badge-info">6:00 AM</span></div>
+			<div class="list-card" style="cursor: default;"><span>🎁 Vales OxxoGas</span><span class="badge badge-info">cada hora</span></div>
+			<div class="list-card" style="cursor: default;"><span>🖼️ Wallpapers Bing</span><span class="badge badge-info">cada 6 h</span></div>
+		</div>
+	</div>
 
-  <div class="surface p-4 rounded-lg">
-    <h3 class="font-semibold text-text mb-2">Alertas Activas</h3>
-    <ul class="space-y-2 text-muted">
-      <li>📈 Tipo de cambio USD/MXN - Diario 6:00 AM</li>
-      <li>🎁 Vales OxxoGas - Sincronización hora</li>
-      <li>🖼️ Wallpapers Bing - Cada 6 horas</li>
-    </ul>
-  </div>
-
-  <p class="text-center text-sm text-muted mt-6">
-    Workers corriendo en segundo plano. Sin módulos operativos en esta vista.
-  </p>
+	<p style="text-align: center; font-size: 0.8rem; color: var(--color-text-muted); margin-top: 1rem;">
+		Workers corriendo en segundo plano.
+	</p>
 </div>

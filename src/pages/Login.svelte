@@ -1,72 +1,144 @@
 <script>
-  import { navigate } from 'svelte-routing';
-  import { auth } from '$lib/stores/auth.js';
+	import { navigate } from 'svelte-routing';
+	import { auth } from '$lib/stores/auth.js';
 
-  let email = '';
-  let password = '';
-  let error = '';
-  let loading = false;
+	let email = '';
+	let password = '';
+	let error = '';
+	let loading = false;
+	let privateMode = false;
 
-  async function handleLogin(e) {
-    e.preventDefault();
-    error = '';
-    loading = true;
-    try {
-      await auth.login(email, password);
-      navigate('/dashboard', { replace: true });
-    } catch (err) {
-      error = err.message || 'Error al iniciar sesión';
-    } finally {
-      loading = false;
-    }
-  }
+	// Detectar navegación privada: localStorage no persiste ahí
+	try {
+		localStorage.setItem('__t', '1');
+		if (localStorage.getItem('__t') !== '1') privateMode = true;
+		localStorage.removeItem('__t');
+	} catch {
+		privateMode = true;
+	}
+
+	async function login() {
+		if (!email || !password) {
+			error = 'Por favor, complete todos los campos.';
+			return;
+		}
+		loading = true;
+		error = '';
+		try {
+			await auth.login(email, password);
+			navigate('/dashboard', { replace: true });
+		} catch (e) {
+			error = e.message || 'Usuario o contraseña incorrectos.';
+		} finally {
+			loading = false;
+		}
+	}
+
+	function limpiar() {
+		email = '';
+		password = '';
+		error = '';
+	}
 </script>
 
-<div class="min-h-screen bg-dark flex items-center justify-center p-6">
-  <div class="surface w-full rounded-lg p-8 shadow-xl" style="max-width: 400px;">
-    <div class="flex justify-center mb-4">
-      <img src="/admon_logo.png" alt="Admon ECCSA" class="rounded-2xl" style="height: 96px; width: 96px; object-fit: cover;" />
-    </div>
-    <h2 class="text-2xl font-bold text-text text-center mb-6">🔑 Iniciar Sesión</h2>
+<div class="login-page">
+	<div class="login-card">
+		<img class="logo-img" src="/admon_logo.png" alt="Admon ECCSA" />
+		<h1>ADMON</h1>
+		<p class="subtitle">ECCSA AUTOMATION</p>
 
-    {#if error}
-      <div class="rounded bg-red-500/10 border border-red-500/20 p-3 mb-4 text-sm text-red-400">
-        {error}
-      </div>
-    {/if}
+		{#if privateMode}
+			<div class="error">⚠️ Estás en navegación privada: la sesión NO se guardará al cerrar el navegador. Abre en una pestaña normal para mantener la sesión.</div>
+		{/if}
 
-    <form on:submit={handleLogin} class="space-y-4">
-      <div>
-        <label class="block text-sm text-muted mb-2" for="email">Correo Electrónico</label>
-        <input
-          id="email"
-          type="email"
-          placeholder="usuario@ecc-ssa.com.mx"
-          bind:value={email}
-          required
-          class="w-full bg-dark border border-surface rounded px-3 py-2 text-text focus:outline-none"
-        />
-      </div>
+		<form on:submit={(e) => { e.preventDefault(); login(); }}>
+			<div class="field">
+				<label for="email">Usuario o Correo:</label>
+				<input
+					id="email"
+					type="email"
+					class="input"
+					placeholder="usuario@ecc-ssa.com.mx o usuario@ecc-sa.com.mx"
+					autocomplete="username"
+					bind:value={email}
+				/>
+			</div>
 
-      <div>
-        <label class="block text-sm text-muted mb-2" for="password">Contraseña</label>
-        <input
-          id="password"
-          type="password"
-          placeholder="Ingrese su contraseña"
-          bind:value={password}
-          required
-          class="w-full bg-dark border border-surface rounded px-3 py-2 text-text focus:outline-none"
-        />
-      </div>
+			<div class="field">
+				<label for="password">Contraseña:</label>
+				<input
+					id="password"
+					type="password"
+					class="input"
+					placeholder="Ingrese su contraseña"
+					autocomplete="current-password"
+					bind:value={password}
+				/>
+			</div>
 
-      <button
-        type="submit"
-        disabled={loading}
-        class="w-full bg-primary text-white py-2 rounded font-medium"
-      >
-        {loading ? 'Verificando…' : 'Entrar'}
-      </button>
-    </form>
-  </div>
+			{#if error}
+				<div class="error" style="margin-top:1rem;">
+					{error}
+				</div>
+			{/if}
+
+			<div class="field" style="margin-top:1rem;">
+				<button type="submit" class="btn btn-primary btn-block" disabled={loading}>
+					{loading ? 'Verificando…' : '🔑 Ingresar'}
+				</button>
+			</div>
+			<button type="button" class="btn btn-secondary btn-block" style="margin-top:0.5rem" on:click={limpiar}>
+				⬅️ Limpiar
+			</button>
+		</form>
+	</div>
 </div>
+
+<style>
+	.login-page {
+		min-height: 100dvh;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1.5rem;
+		background: transparent;
+	}
+	.login-card {
+		width: 100%;
+		max-width: 360px;
+		text-align: center;
+	}
+	.logo-img {
+		width: 120px;
+		height: 120px;
+		object-fit: cover;
+		border-radius: 24px;
+		margin-bottom: 0.5rem;
+	}
+	h1 {
+		font-size: 1.5rem;
+		font-weight: 700;
+		margin: 0 0 0.15rem;
+		letter-spacing: 1px;
+	}
+	.subtitle {
+		color: var(--color-text-muted);
+		margin: 0 0 2rem;
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 2px;
+	}
+	.field {
+		text-align: left;
+		margin-bottom: 1rem;
+	}
+	.error {
+		background: rgba(239, 68, 68, 0.1);
+		color: #EF4444;
+		padding: 0.75rem;
+		border-radius: 8px;
+		font-size: 0.85rem;
+		margin-bottom: 1rem;
+		text-align: left;
+	}
+</style>

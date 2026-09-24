@@ -1,43 +1,35 @@
 <script>
-  import { onMount } from 'svelte';
-  import { navigate } from 'svelte-routing';
-  import { auth } from '$lib/stores/auth.js';
+	import { onMount } from 'svelte';
+	import { navigate } from 'svelte-routing';
+	import { auth } from '$lib/stores/auth.js';
 
-  onMount(() => {
-    if (!auth.isLoggedIn()) navigate('/login', { replace: true });
-  });
+	onMount(() => {
+		if (!auth.isLoggedIn()) navigate('/login', { replace: true });
+	});
 </script>
 
-<div class="p-6 pb-24">
-  <h1 class="text-2xl font-bold text-text mb-4">⚙️ Configuración del Sistema</h1>
+<div class="page">
+	<div class="header">
+		<h1>⚙️ Configuración</h1>
+	</div>
 
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-    <div class="surface p-4 rounded-lg">
-      <h3 class="font-semibold text-text mb-3">Base de Datos</h3>
-      <ul class="space-y-2 text-muted">
-        <li><strong>Servidor:</strong> 10.188.141.15</li>
-        <li><strong>Base de Datos:</strong> ECCSA_Admon</li>
-        <li><strong>Usuario:</strong> sa</li>
-      </ul>
-    </div>
+	<div class="grid-2" style="margin-bottom: 0.75rem;">
+		<div class="card">
+			<h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Base de Datos</h3>
+			<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">SQL Server · ECCSA_Admon</p>
+			<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">Usuario: sa</p>
+		</div>
+		<div class="card">
+			<h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Correo SMTP</h3>
+			<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">smtpout.secureserver.net:465</p>
+			<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">robot@ecc-sa.com.mx</p>
+		</div>
+	</div>
 
-    <div class="surface p-4 rounded-lg">
-      <h3 class="font-semibold text-text mb-3">SMTP (Correo)</h3>
-      <ul class="space-y-2 text-muted">
-        <li><strong>Servidor:</strong> smtpout.secureserver.net</li>
-        <li><strong>Puerto:</strong> 465 (SSL)</li>
-        <li><strong>Usuario:</strong> robot@ecc-sa.com.mx</li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="surface p-4 rounded-lg">
-    <h3 class="font-semibold text-text mb-3">App</h3>
-    <ul class="space-y-2 text-muted">
-      <li>Versión: 1.0.0 (desarrollo)</li>
-      <li>Stack: Svelte 5 + FastAPI</li>
-      <li>Base de datos: SQL Server via pymssql</li>
-      <li>Autenticación: JWT simple (sin passkeys WebAuthn)</li>
-    </ul>
-  </div>
+	<div class="card">
+		<h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">App</h3>
+		<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">Versión: 1.0.0</p>
+		<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">Stack: Svelte 5 + FastAPI + PWA</p>
+		<p style="color: var(--color-text-muted); font-size: 0.85rem; margin: 0.15rem 0;">Auth: JWT simple (sin passkeys)</p>
+	</div>
 </div>

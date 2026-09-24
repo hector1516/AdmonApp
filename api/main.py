@@ -46,6 +46,7 @@ class UserInfo(BaseModel):
     acceso_oc: bool = False
     acceso_calculo: bool = False
     acceso_telegram: bool = False
+    acceso_usuarios: bool = False
 
 
 # --- Auth Dependency ---
@@ -60,7 +61,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         parts = token.split("|")
         if len(parts) >= 2:
             email = parts[0]
-            cursor.execute("SELECT IdUsuario, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram FROM HUB_Users WHERE Email = %s", (email,))
+            cursor.execute("SELECT IdUsuario, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE Email = %s", (email,))
             row = cursor.fetchone()
             conn.close()
             if row:
@@ -75,6 +76,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
                     "acceso_oc": row[7] == 1,
                     "acceso_calculo": row[8] == 1,
                     "acceso_telegram": row[9] == 1,
+                    "acceso_usuarios": row[10] == 1,
                 }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
@@ -145,7 +147,11 @@ def _build_login_response(email: str, row) -> dict:
     timestamp = int(time.time())
     token = f"{email}|{timestamp}"
     expires_at = (timestamp + 7 * 24 * 3600) * 1000  # 7 días en ms
-    user = {"id": row[0], "nombre": row[1], "email": row[2]}
+    # row: IdUsuario, Nombre, Email, Contrasenia, AccesoUsuarios
+    user = {
+        "id": row[0], "nombre": row[1], "email": row[2],
+        "acceso_usuarios": (row[4] == 1) if len(row) > 4 and row[4] is not None else False,
+    }
     return {"token": token, "user": user, "expiresAt": expires_at}
 
 
@@ -158,7 +164,7 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT IdUsuario, Nombre, Email, Contrasenia FROM HUB_Users WHERE Email = %s", (body.email,))
+        cursor.execute("SELECT IdUsuario, Nombre, Email, Contrasenia, AccesoUsuarios FROM HUB_Users WHERE Email = %s", (body.email,))
         row = cursor.fetchone()
         conn.close()
         if row and row[3] == body.password:
@@ -183,7 +189,7 @@ async def get_users(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT IdUsuario, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram FROM HUB_Users")
+        cursor.execute("SELECT IdUsuario, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users")
         rows = cursor.fetchall()
         conn.close()
         result = []
@@ -197,6 +203,7 @@ async def get_users(current_user: dict = Depends(get_current_user)):
                 acceso_oc=row[7] == 1,
                 acceso_calculo=row[8] == 1,
                 acceso_telegram=row[9] == 1,
+                acceso_usuarios=row[10] == 1,
             ))
         return result
     except Exception as e:
@@ -494,7 +501,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones_materiales", "telegram", "config"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones_materiales", "usuarios", "telegram", "config"}
 
     @app.get("/")
     async def spa_root():
