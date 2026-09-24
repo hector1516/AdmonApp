@@ -1,9 +1,9 @@
 {
 	"name": "Admon ECCSA",
 	"short_name": "Admon",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Panel de administración ECCSA — Cotizaciones, Usuarios, Telegram",
-	"start_url": "/?v=1.0.0",
+	"start_url": "/?v=1.0.1",
 	"scope": "/",
 	"display": "standalone",
 	"background_color": "#0F172A",

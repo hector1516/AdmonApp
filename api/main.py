@@ -508,16 +508,24 @@ try:
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
     _SPA_ROUTES = {"login", "dashboard", "cotizaciones_materiales", "usuarios", "telegram", "config"}
+    # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
+    _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+    _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}
+
+    def _spa_file(name: str):
+        resp = FileResponse(str(_dist / name))
+        resp.headers.update(_NO_STORE)
+        return resp
 
     @app.get("/")
     async def spa_root():
         if _has_spa:
-            return FileResponse(str(_dist / "index.html"))
+            return _spa_file("index.html")
         return {"message": "HUB Admon API", "version": "1.0.0"}
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
-        # 1) Archivo real de dist/ (logo, favicon, etc.)
+        # 1) Archivo real de dist/ (logo, favicon, iconos, etc.)
         if _has_spa:
             candidate = (_dist / full_path)
             try:
@@ -526,11 +534,14 @@ try:
             except ValueError:
                 raise HTTPException(status_code=404, detail="Not found")
             if full_path and candidate.is_file():
-                return FileResponse(str(candidate))
+                resp = FileResponse(str(candidate))
+                if candidate.name in _NO_STORE_FILES:
+                    resp.headers.update(_NO_STORE)
+                return resp
             # 2) Ruta de la SPA -> index.html (el router del frontend decide)
             first = full_path.split("/", 1)[0]
             if first in _SPA_ROUTES:
-                return FileResponse(str(_dist / "index.html"))
+                return _spa_file("index.html")
         raise HTTPException(status_code=404, detail="Not found")
 except Exception:
     pass

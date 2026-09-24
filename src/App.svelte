@@ -76,7 +76,7 @@
 		{:else}
 			<Dashboard />
 		{/if}
-		<div class="version-badge">Admon v1.0.0</div>
+		<div class="version-badge">Admon v1.0.1</div>
 	</div>
 {:else}
 	<div class="splash">
