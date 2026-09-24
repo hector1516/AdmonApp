@@ -114,18 +114,56 @@
 		window.open(`/api/reportes/${idReporte}/pdf?token=${encodeURIComponent(token)}`, '_blank');
 	}
 
-	async function eliminar() {
-		if (!confirm(`¿Eliminar el reporte ${reporte.Folio}? Esta acción no se puede deshacer.`)) return;
+	async function moverAPapelera() {
+		if (!confirm(`¿Mover a PAPELERA el reporte ${reporte.Folio}?\n\nSe ocultará de la lista principal pero se podrá restaurar desde la pestaña "Papelera".\n\n¿Continuar?`)) return;
 		error = '';
 		msg = '';
 		busy = true;
 		try {
 			const res = await fetch(`/api/reportes/${idReporte}`, { method: 'DELETE', headers: auth.authHeader() });
 			const data = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(data.detail || 'Error al eliminar.');
+			if (!res.ok) throw new Error(data.detail || 'Error al mover a papelera.');
+			msg = '🗑️ Movido a papelera.';
+			await cargar();
+		} catch (e) {
+			error = e.message || 'Error al mover a papelera.';
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function restaurar() {
+		if (!confirm(`¿RESTAURAR el reporte ${reporte.Folio}?\n\nVolverá a la lista de "Firmados".`)) return;
+		error = '';
+		msg = '';
+		busy = true;
+		try {
+			const res = await fetch(`/api/reportes/${idReporte}/restaurar`, { method: 'POST', headers: auth.authHeader() });
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.detail || 'Error al restaurar.');
+			msg = '✅ Restaurado.';
+			await cargar();
+		} catch (e) {
+			error = e.message || 'Error al restaurar.';
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function eliminarDefinitivo() {
+		if (!confirm(`⚠️ ELIMINACIÓN PERMANENTE ⚠️\n\n¿Borrar DEFINITIVAMENTE el reporte ${reporte.Folio}?\n\n❌ NO SE PUEDE DESHACER\n❌ Se borran fotos, técnicos y todo el historial\n\nEscribe "ELIMINAR" para confirmar:`)) return;
+		const input = prompt('Escribe "ELIMINAR" para confirmar borrado permanente:');
+		if (input !== 'ELIMINAR') return;
+		error = '';
+		msg = '';
+		busy = true;
+		try {
+			const res = await fetch(`/api/reportes/${idReporte}/purge`, { method: 'DELETE', headers: auth.authHeader() });
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.detail || 'Error al eliminar permanentemente.');
 			navigate('/registro_reportes', { replace: true });
 		} catch (e) {
-			error = e.message || 'Error al eliminar.';
+			error = e.message || 'Error al eliminar permanentemente.';
 			busy = false;
 		}
 	}
@@ -412,7 +450,12 @@
 		<div class="card">
 			<div class="grid-2">
 				<button class="btn btn-primary btn-block" on:click={verPDF}>🔓 Ver PDF</button>
-				<button class="btn btn-danger btn-block" on:click={eliminar} disabled={busy}>🚨 Eliminar Reporte</button>
+				{#if reporte.Eliminado === 1 || reporte.Eliminado === true}
+					<button class="btn btn-success btn-block" on:click={restaurar} disabled={busy}>♻️ Restaurar</button>
+					<button class="btn btn-danger btn-block" on:click={eliminarDefinitivo} disabled={busy}>💀 Eliminar definitivamente</button>
+				{:else}
+					<button class="btn btn-warning btn-block" on:click={moverAPapelera} disabled={busy}>🗑️ Mover a papelera</button>
+				{/if}
 			</div>
 		</div>
 	{/if}

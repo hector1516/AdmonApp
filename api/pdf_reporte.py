@@ -106,11 +106,20 @@ def _build_photo_grid_composite(fotos, max_photos=6):
     # Procesar máximo 6 fotos
     for idx, foto in enumerate(fotos[:max_photos]):
         try:
-            # Normalizar imagen (PNG, 250px max)
+            # Obtener base64 (puede venir como 'FotoComprimida' o 'base64')
             b64 = foto.get('FotoComprimida') or foto.get('base64')
             if not b64:
-                continue
-            raw = base64.b64decode(b64)
+                raise ValueError("No base64 data")
+            
+            # Manejar tanto string (base64) como bytes
+            if isinstance(b64, str):
+                raw = base64.b64decode(b64)
+            elif isinstance(b64, bytes):
+                raw = b64
+            else:
+                raise ValueError(f"Unexpected type: {type(b64)}")
+            
+            # Normalizar imagen (PNG, 250px max)
             normalized = _normalize_image_for_pdf(raw, max_dim=CELL_W)
             pil_img = PILImage.open(normalized)
 
@@ -135,14 +144,15 @@ def _build_photo_grid_composite(fotos, max_photos=6):
             text_y = y + CELL_H + 5
             draw.text((text_x, text_y), caption, fill='#475569', font=font)
 
-        except Exception:
-            # Si falla una foto, dibujar placeholder
+        except Exception as e:
+            # Si falla una foto, dibujar placeholder con error visible
             col = idx % COLS
             row = idx // COLS
             x = MARGIN + col * (CELL_W + GAP)
             y = MARGIN + row * (CELL_H + CAPTION_H + GAP)
             draw.rectangle([x, y, x + CELL_W, y + CELL_H], outline='#CBD5E1', width=1)
-            draw.text((x + 10, y + CELL_H // 2), f"Foto {foto['Orden']} (error)", fill='#EF4444', font=font)
+            draw.text((x + 10, y + CELL_H // 2 - 10), f"Foto {foto.get('Orden', idx+1)}", fill='#EF4444', font=font)
+            draw.text((x + 10, y + CELL_H // 2 + 10), f"Error: {str(e)[:30]}", fill='#EF4444', font=font)
 
     # Guardar como JPEG baseline (más pequeño que PNG para canvas grande)
     out = io.BytesIO()

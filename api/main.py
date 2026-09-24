@@ -1506,30 +1506,34 @@ def _folio_from_id(cur, next_id: int) -> str:
 
 
 @app.get("/api/reportes")
-async def api_list_reportes(tecnico: str = "", current_user: dict = Depends(get_current_user)):
-    """Lista reportes (top 500). Filtra por técnico si se pasa."""
+async def api_list_reportes(tecnico: str = "", eliminados: bool = False, current_user: dict = Depends(get_current_user)):
+    """Lista reportes (top 500). Filtra por técnico si se pasa. eliminados=true muestra papelera."""
     _require_reporte(current_user)
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        where_eliminado = "AND Eliminado = 1" if eliminados else "AND (Eliminado = 0 OR Eliminado IS NULL)"
+        
         if tecnico:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
                        DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
-                       TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
+                       TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion, Eliminado, FechaEliminado
                 FROM ReportesServicio
-                WHERE Tecnico = %s
+                WHERE (Tecnico = %s
                    OR IdReporte IN (SELECT IdReporte FROM ReportesServicioTecnicos
                                     INNER JOIN HUB_Users u ON u.Id = ReportesServicioTecnicos.IdUsuario
-                                    WHERE u.Nombre = %s)
+                                    WHERE u.Nombre = %s))
+                   {where_eliminado}
                 ORDER BY Fecha DESC, IdReporte DESC
             """, (tecnico.strip(), tecnico.strip()))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT TOP 500 IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
                        DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
-                       TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
+                       TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion, Eliminado, FechaEliminado
                 FROM ReportesServicio
+                WHERE 1=1 {where_eliminado}
                 ORDER BY Fecha DESC, IdReporte DESC
             """)
         rows = cursor.fetchall()
@@ -1684,6 +1688,44 @@ async def api_delete_reporte(id_reporte: int, current_user: dict = Depends(get_c
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        # Soft delete: marcar como eliminado en lugar de borrar
+        cursor.execute("SELECT Folio FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
+        row = cursor.fetchone()
+        folio = row[0] if row else str(id_reporte)
+        cursor.execute("UPDATE ReportesServicio SET Eliminado = 1, FechaEliminado = GETDATE() WHERE IdReporte = %s", (int(id_reporte),))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "folio": folio, "message": "Movido a papelera"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/reportes/{id_reporte}/restaurar")
+async def api_restaurar_reporte(id_reporte: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE ReportesServicio SET Eliminado = 0, FechaEliminado = NULL WHERE IdReporte = %s", (int(id_reporte),))
+        conn.commit()
+        cursor.execute("SELECT Folio FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
+        row = cursor.fetchone()
+        conn.close()
+        return {"ok": True, "folio": row[0] if row else "", "message": "Restaurado desde papelera"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/reportes/{id_reporte}/purge")
+async def api_purge_reporte(id_reporte: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
         cursor.execute("SELECT Folio FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
         row = cursor.fetchone()
         folio = row[0] if row else str(id_reporte)
@@ -1692,7 +1734,7 @@ async def api_delete_reporte(id_reporte: int, current_user: dict = Depends(get_c
         cursor.execute("DELETE FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
         conn.commit()
         conn.close()
-        return {"ok": True, "folio": folio}
+        return {"ok": True, "folio": folio, "message": "Eliminado permanentemente"}
     except HTTPException:
         raise
     except Exception as e:
