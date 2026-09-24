@@ -18,6 +18,7 @@
 	import CotizacionEstatus from './pages/CotizacionEstatus.svelte';
 	import Usuarios from './pages/Usuarios.svelte';
 	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
+	import Clientes from './pages/Clientes.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
@@ -100,8 +101,10 @@
 				<Usuarios />
 			{:else if $path.startsWith('/usuarios/')}
 				<UsuarioDetalle id={$path.split('/')[2]} />
-		{:else if $path === '/telegram'}
-			<Telegram />
+			{:else if $path === '/telegram'}
+				<Telegram />
+			{:else if $path === '/clientes'}
+				<Clientes />
 		{:else if $path === '/config'}
 			<Config />
 		{:else}

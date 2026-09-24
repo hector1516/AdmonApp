@@ -40,6 +40,12 @@
 			"short_name": "Telegram",
 			"url": "/telegram",
 			"description": "Alertas de Telegram"
+		},
+		{
+			"name": "Clientes",
+			"short_name": "Clientes",
+			"url": "/clientes",
+			"description": "Catálogo de clientes"
 		}
 	]
 }

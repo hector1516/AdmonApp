@@ -885,17 +885,27 @@ def _cotizacion_pdf_bytes(folio: int) -> tuple:
     cursor = conn.cursor()
     cursor.execute(
         "SELECT IM.Folio, IM.IdCliente, IM.Contacto, IM.Fecha, IM.Descripcion, IM.Nota, "
-        "IM.Autor, IM.Color, C.Cliente AS ClienteNombre "
+        "IM.Autor, IM.Color, C.Cliente AS ClienteNombre, C.CondicionesPagoDias "
         "FROM IndiceMateriales IM LEFT JOIN clientes C ON IM.IdCliente = C.IdCliente "
         "WHERE IM.Folio = %s", (int(folio),))
     r = cursor.fetchone()
     if not r:
         conn.close()
         raise HTTPException(status_code=404, detail="Cotización no encontrada")
+    autor = r[6] or ""
+    telefono = "8183589075"
+    try:
+        cursor.execute("SELECT TOP 1 Telefono FROM MAC WHERE Nombre = %s ORDER BY Telefono DESC", (autor,))
+        trow = cursor.fetchone()
+        if trow and trow[0]:
+            telefono = str(trow[0]).strip()
+    except Exception:
+        pass
     header = {
         "folio": r[0], "id_cliente": r[1] or "", "contacto": r[2] or "",
-        "fecha": _fstr(r[3]), "descripcion": r[4] or "", "nota": r[5] or "",
-        "autor": r[6] or "", "color": int(r[7] or 0), "cliente_nombre": r[8] or "",
+        "fecha": r[3], "descripcion": r[4] or "", "nota": r[5] or "",
+        "autor": autor, "color": int(r[7] or 0), "cliente_nombre": r[8] or "",
+        "condiciones_pago": r[9] or 30, "telefono": telefono,
     }
     cursor.execute(
         "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, "
@@ -1414,7 +1424,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}
