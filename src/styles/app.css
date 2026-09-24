@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Variables CSS para consistencia */
+:root {
+  --color-dark: #0F172A;
+  --color-surface: #1E293B;
+  --color-primary: #FF6B00;
+  --color-secondary: #FFAE00;
+  --color-text: #F8FAFC;
+  --color-muted: #64748B;
+  --color-accent: #FFB400;
+}
+
+/* Clases utilitarias */
+.bg-dark { background-color: var(--color-dark) !important; }
+.bg-surface { background-color: var(--color-surface) !important; }
+.text-primary { color: var(--color-primary) !important; }
+.text-secondary { color: var(--color-secondary) !important; }
+.text-text { color: var(--color-text) !important; }
+.text-muted { color: var(--color-muted) !important; }
+.accent { color: var(--color-accent) !important; }
+
+/* Scrollbar personalizado */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #1E293B;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #FF6B00;
+}
+
+/* Transiciones */
+.transition-all { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.transition-color { transition: color 0.2s ease, background-color 0.2s ease; }
