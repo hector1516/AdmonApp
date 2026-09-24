@@ -121,11 +121,15 @@
 				auth.logout();
 				navigate('/login', { replace: true });
 			} else {
-				error = `Error del servidor (${res.status})`;
+				let detalle = '';
+				try {
+					detalle = (await res.text()).slice(0, 160);
+				} catch {}
+				error = `Error del servidor (${res.status}) ${detalle}`;
 			}
 		} catch (e) {
 			console.error('Error cargando usuario:', e);
-			error = 'No se pudo conectar con el servidor.';
+			error = `No se pudo conectar (${e.name || 'fetch'}): ${e.message || 'sin detalle'}`;
 		} finally {
 			loading = false;
 		}
