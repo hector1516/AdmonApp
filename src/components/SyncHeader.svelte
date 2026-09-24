@@ -4,28 +4,29 @@
 	import { get } from 'svelte/store';
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { pendingCount, syncing, syncPush } from '$lib/sync.js';
+	import { pendingCount, syncing, syncPush, refreshPending } from '$lib/sync.js';
 
 	async function forceSync() {
 		if (!get(online) || get(syncing)) return;
 		await onlinePing();
 		await syncPush();
+		refreshPending();
 	}
 </script>
 
 <button
 	class="sync-header"
 	class:offline={!$online}
-	class:syncing
-	class:has-items={pendingCount > 0}
+	class:syncing={$syncing}
+	class:has-items={$pendingCount > 0}
 	on:click={forceSync}
 >
-	{#if !$online}
+{#if !$online}
 		<span class="dot offline"></span><span>Sin conexión — modo offline</span>
-	{:else if syncing}
+	{:else if $syncing}
 		<span class="dot syncing"></span><span>Sincronizando...</span>
-	{:else if pendingCount > 0}
-		<span class="dot pending"></span><span>{pendingCount} pendiente{pendingCount > 1 ? 's' : ''} — toca para sincronizar</span>
+	{:else if $pendingCount > 0}
+		<span class="dot pending"></span><span>{$pendingCount} pendiente{$pendingCount > 1 ? 's' : ''} — toca para sincronizar</span>
 	{:else}
 		<span class="dot ok"></span><span>Todo sincronizado</span>
 	{/if}

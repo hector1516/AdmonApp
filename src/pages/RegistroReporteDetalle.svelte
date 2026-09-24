@@ -302,7 +302,7 @@
 					</div>
 				</div>
 				<div class="field">
-					<label>Técnico responsable *</label>
+					<label>Ingeniero responsable *</label>
 					<select class="input" bind:value={editForm.tecnico}>
 						{#each tecnicosHub as t}
 							<option value={t}>{t}</option>
@@ -328,7 +328,7 @@
 					<div class="field"><label>Comida</label><select class="input" bind:value={editForm.tiempo_comida}><option value="0">No</option><option value="1">Sí</option></select></div>
 				</div>
 				<div class="field">
-					<label>Técnicos adicionales (coma)</label>
+					<label>Ingenieros adicionales (coma)</label>
 					<input class="input" bind:value={editForm.tecnicos_adicionales} placeholder="Juan Pérez, María López…" />
 				</div>
 				<div class="field">
@@ -353,7 +353,7 @@
 					<div><strong>Contacto:</strong> {reporte.Contacto || 'N/A'}</div>
 					<div><strong>Correo:</strong> {reporte.CorreoContacto || 'N/A'}</div>
 					<div><strong>Cotización Asociada:</strong> {reporte.Cotizacion || '*Sin cotización vinculada*'}</div>
-					<div><strong>Técnico:</strong> <strong>{reporte.Tecnico}</strong></div>
+					<div><strong>Ingeniero:</strong> <strong>{reporte.Tecnico}</strong></div>
 					<div><strong>Máquina/Línea:</strong> {reporte.MaquinaLinea || '—'}</div>
 					<div><strong>Inicio:</strong> {formatearFecha(reporte.FechaHoraInicio)}</div>
 					<div><strong>Fin:</strong> {formatearFecha(reporte.FechaHoraFin)}</div>

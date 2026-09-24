@@ -170,7 +170,7 @@ class ServiceNumberedCanvas(canvas.Canvas):
         page_text = f"Página {self._pageNumber} de {page_count}"
         self.drawRightString(595, 12, page_text)
         # Technician photos (bottom right area)
-        if self.tech_photos and self._pageNumber == num_pages:
+        if self.tech_photos and self._pageNumber == page_count:
             x_start = 420
             y_pos = 12
             ph_w = 30

@@ -64,7 +64,7 @@
 
 	async function guardar() {
 		if (!form.cliente.trim()) { error = 'Cliente obligatorio.'; return; }
-		if (!form.tecnico.trim()) { error = 'Técnico obligatorio.'; return; }
+		if (!form.tecnico.trim()) { error = 'Ingeniero obligatorio.'; return; }
 		if (!form.fecha_inicio || !form.fecha_fin) { error = 'Hora inicio y fin obligatorias.'; return; }
 
 		error = '';
@@ -141,7 +141,7 @@
 			</div>
 
 			<div class="field">
-				<label for="tecnico">Técnico responsable *</label>
+				<label for="tecnico">Ingeniero responsable *</label>
 				<select id="tecnico" class="input" bind:value={form.tecnico}>
 					<option value="">Selecciona…</option>
 					{#each tecnicosHub as t}
@@ -188,7 +188,7 @@
 			</div>
 
 			<div class="field">
-				<label for="tecnicos_ad">Técnicos adicionales (separados por coma)</label>
+				<label for="tecnicos_ad">Ingenieros adicionales (separados por coma)</label>
 				<input id="tecnicos_ad" class="input" bind:value={form.tecnicos_adicionales} placeholder="Juan Pérez, María López…" />
 				<p class="hint">Deben existir como usuarios activos en HUB.</p>
 			</div>

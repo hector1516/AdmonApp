@@ -359,7 +359,7 @@
 					</div>
 				</div>
 				<div class="field">
-					<label>Técnico responsable *</label>
+					<label>Ingeniero responsable *</label>
 					<select class="input" bind:value={editForm.tecnico}>
 						{#each tecnicosHub as t}
 							<option value={t}>{t}</option>
@@ -385,7 +385,7 @@
 					<div class="field"><label>Comida</label><select class="input" bind:value={editForm.tiempo_comida}><option value="0">No</option><option value="1">Sí</option></select></div>
 				</div>
 				<div class="field">
-					<label>Técnicos adicionales (coma)</label>
+					<label>Ingenieros adicionales (coma)</label>
 					<input class="input" bind:value={editForm.tecnicos_adicionales} placeholder="Juan Pérez, María López…" />
 				</div>
 				<div class="grid-2">
@@ -400,7 +400,7 @@
 					<div><strong>Fecha:</strong> {reporte.Fecha ? String(reporte.Fecha).split('T')[0] : '-'}</div>
 					<div><strong>Contacto:</strong> {reporte.Contacto || '-'}</div>
 					<div><strong>Correo:</strong> {reporte.CorreoContacto || '-'}</div>
-					<div><strong>Técnico:</strong> {reporte.Tecnico}</div>
+					<div><strong>Ingeniero:</strong> {reporte.Tecnico}</div>
 					<div><strong>Máquina/Línea:</strong> {reporte.MaquinaLinea || '-'}</div>
 					<div><strong>Inicio:</strong> {reporte.FechaHoraInicio ? String(reporte.FechaHoraInicio).slice(11, 16) : '-'}</div>
 					<div><strong>Fin:</strong> {reporte.FechaHoraFin ? String(reporte.FechaHoraFin).slice(11, 16) : '-'}</div>
@@ -424,9 +424,9 @@
 			{/if}
 		</div>
 
-		<!-- Técnicos adicionales -->
+		<!-- Ingenieros adicionales -->
 		<div class="card" style="margin-bottom: 0.75rem;">
-			<div class="card-title">👥 Técnicos del reporte</div>
+			<div class="card-title">👥 Ingenieros del reporte</div>
 			<div style="font-size: 0.9rem;">
 				<strong>Responsable:</strong> {reporte.Tecnico}
 			</div>
@@ -444,7 +444,7 @@
 			{/if}
 			{#if editando}
 				<div class="field" style="margin-top: 0.5rem;">
-					<label>Técnicos adicionales (coma)</label>
+					<label>Ingenieros adicionales (coma)</label>
 					<input class="input" bind:value={editForm.tecnicos_adicionales} placeholder="Juan Pérez, María López…" />
 				</div>
 			{/if}
