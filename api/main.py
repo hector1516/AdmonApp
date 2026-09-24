@@ -1200,6 +1200,42 @@ async def cliente_nombre(id_cliente: str, current_user: dict = Depends(get_curre
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+class ContactoRename(BaseModel):
+    anterior: str = ""
+    nuevo: str = ""
+
+
+@app.put("/api/clientes/{id_cliente}/contactos")
+async def cliente_contacto_rename(id_cliente: str, body: ContactoRename, current_user: dict = Depends(get_current_user)):
+    """Renombra un contacto en todas las cotizaciones del cliente (los contactos
+    son historial en IndiceMateriales.Contacto, no catálogo: renombrar = UPDATE)."""
+    _require_cotiz(current_user)
+    anterior = (body.anterior or "").strip()
+    nuevo = (body.nuevo or "").strip()
+    if not anterior or not nuevo:
+        raise HTTPException(status_code=400, detail="Contacto anterior y nuevo son obligatorios.")
+    if anterior == nuevo:
+        return {"ok": True, "actualizados": 0}
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE IndiceMateriales SET Contacto = %s WHERE IdCliente = %s AND Contacto = %s",
+            (nuevo, id_cliente.strip().upper(), anterior),
+        )
+        try:
+            n = cursor.rowcount
+        except Exception:
+            n = 0
+        conn.commit()
+        conn.close()
+        return {"ok": True, "actualizados": int(n or 0)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @app.get("/api/clientes/{id_cliente}/contactos")
 async def cliente_contactos(id_cliente: str, current_user: dict = Depends(get_current_user)):
     _require_cotiz(current_user)

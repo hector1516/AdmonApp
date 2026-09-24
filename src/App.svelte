@@ -19,6 +19,7 @@
 	import Usuarios from './pages/Usuarios.svelte';
 	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
 	import Clientes from './pages/Clientes.svelte';
+	import ClienteDetalle from './pages/ClienteDetalle.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
@@ -105,6 +106,8 @@
 				<Telegram />
 			{:else if $path === '/clientes'}
 				<Clientes />
+			{:else if $path.startsWith('/clientes/')}
+				<ClienteDetalle id={$path.split('/')[2]} />
 		{:else if $path === '/config'}
 			<Config />
 		{:else}

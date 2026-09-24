@@ -245,7 +245,7 @@
 	{:else}
 		<div class="list">
 			{#each filtrados as c (c.id_cliente)}
-				<button class="list-card" class:selected={selId === c.id_cliente} on:click={() => seleccionar(c)}>
+				<button class="list-card" class:selected={selId === c.id_cliente} on:click={() => navigate(`/clientes/${c.id_cliente}`)}>
 					<div>
 						<div style="font-weight: 800; color: var(--color-primary-light);">{c.id_cliente}</div>
 						<div style="font-size: 0.9rem;">{c.nombre}</div>
