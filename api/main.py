@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
@@ -180,6 +180,135 @@ async def api_login(body: LoginRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Login error: {str(e)}")
+
+
+# --- Cambio de contraseña (igual que Field: actual + nueva) ---
+
+class ChangePasswordRequest(BaseModel):
+    actual: str
+    nueva: str
+
+
+@app.post("/api/auth/change-password")
+async def api_change_password(body: ChangePasswordRequest, current_user: dict = Depends(get_current_user)):
+    """Cambia el Password en HUB_Users tras verificar el actual. Mínimo 6 caracteres."""
+    try:
+        if not body.actual or not body.nueva:
+            raise HTTPException(status_code=400, detail="Completa los tres campos.")
+        if len(body.nueva) < 6:
+            raise HTTPException(status_code=400, detail="La nueva contraseña debe tener mínimo 6 caracteres.")
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT Password, Activo FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s",
+            (current_user["email"].strip().lower(),),
+        )
+        row = cursor.fetchone()
+        if not row or not row[1]:
+            conn.close()
+            raise HTTPException(status_code=401, detail="Sesión no válida.")
+        if row[0] != body.actual:
+            conn.close()
+            raise HTTPException(status_code=400, detail="La contraseña actual no es correcta.")
+        cursor.execute(
+            "UPDATE HUB_Users SET Password = %s WHERE LTRIM(RTRIM(Email)) = %s",
+            (body.nueva, current_user["email"].strip().lower()),
+        )
+        conn.close()
+        return {"ok": True, "message": "Contraseña actualizada."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# --- Info del dispositivo (IP vista por el servidor) ---
+
+@app.get("/api/dispositivo/ip")
+async def api_device_ip(request: Request, current_user: dict = Depends(get_current_user)):
+    try:
+        ip = request.client.host if request.client else "?"
+    except Exception:
+        ip = "?"
+    return {"ip": ip}
+
+
+# --- Push: enviar aviso (solo AccesoUsuarios; usa HUB_PushSubscriptions + VAPID) ---
+
+class PushSendRequest(BaseModel):
+    title: str
+    body: str
+    all: bool = True
+    user_ids: List[int] = []
+
+
+@app.post("/api/push/send")
+async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_current_user)):
+    if not current_user.get("acceso_usuarios"):
+        raise HTTPException(status_code=403, detail="No access")
+    if not body.title.strip() or not body.body.strip():
+        raise HTTPException(status_code=400, detail="Escribe título y mensaje.")
+    try:
+        import json
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        raise HTTPException(status_code=500, detail="pywebpush no instalado en el servidor.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # VAPID
+        cursor.execute("SELECT VapidPublicKey, VapidPrivateKey FROM HUB_PushConfig WHERE Id = 1")
+        vk = cursor.fetchone()
+        if not vk or not vk[0] or not vk[1]:
+            conn.close()
+            raise HTTPException(status_code=500, detail="VAPID no configurado.")
+        pub_key, priv_key = vk[0].strip(), vk[1].strip()
+        # Destinatarios
+        if body.all:
+            cursor.execute("SELECT Email FROM HUB_Users WHERE Activo = 1")
+            emails = [r[0] for r in cursor.fetchall()]
+        else:
+            if not body.user_ids:
+                conn.close()
+                raise HTTPException(status_code=400, detail="Selecciona al menos un usuario o marca Todos.")
+            ids = [int(i) for i in body.user_ids]
+            placeholders = ",".join(["%s"] * len(ids))
+            cursor.execute(f"SELECT Email FROM HUB_Users WHERE Id IN ({placeholders})", tuple(ids))
+            emails = [r[0] for r in cursor.fetchall()]
+        if not emails:
+            conn.close()
+            return {"sent": 0}
+        eph = ",".join(["%s"] * len(emails))
+        cursor.execute(
+            f"SELECT Endpoint, P256dhKey, AuthKey FROM HUB_PushSubscriptions WHERE UserEmail IN ({eph})",
+            tuple(emails),
+        )
+        subs = cursor.fetchall()
+        payload = json.dumps({"title": body.title.strip(), "body": body.body.strip()})
+        sent = 0
+        for endpoint, p256dh, auth_key in subs:
+            try:
+                webpush(
+                    subscription_info={"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth_key}},
+                    data=payload,
+                    vapid_private_key=priv_key,
+                    vapid_claims={"sub": "mailto:robot@ecc-sa.com.mx"},
+                )
+                sent += 1
+            except WebPushException as e:
+                if e.response is not None and e.response.status_code in (410, 404):
+                    try:
+                        cursor.execute("DELETE FROM HUB_PushSubscriptions WHERE Endpoint = %s", (endpoint,))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        conn.close()
+        return {"sent": sent}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 # --- User Endpoints ---
