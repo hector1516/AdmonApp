@@ -20,6 +20,11 @@
 	let fotosPreview = $state([]);
 	const maxFotos = 6;
 
+	// Edit mode
+	let editando = $state(false);
+	let editForm = $state({});
+	let tecnicosHub = $state([]);
+
 	function tieneAcceso() {
 		try {
 			const u = JSON.parse(localStorage.getItem('admon_user') || 'null');
@@ -46,6 +51,16 @@
 			const fRes = await fetch(`/api/reportes/${idReporte}/fotos`, { headers: auth.authHeader() });
 			const fotos = fRes.ok ? await fRes.json() : [];
 			reporte._fotos = fotos || [];
+
+			// Cargar técnicos adicionales
+			const tRes = await fetch(`/api/reportes/${idReporte}/tecnicos`, { headers: auth.authHeader() });
+			const tecnicos = tRes.ok ? await tRes.json() : [];
+			reporte._tecnicos_adicionales = tecnicos.filter(t => t !== reporte.Tecnico);
+
+			// Cargar técnicos para select de edición
+			const uRes = await fetch('/api/usuarios', { headers: auth.authHeader() });
+			const usuarios = uRes.ok ? await uRes.json() : [];
+			tecnicosHub = usuarios.filter(u => u.Activo === 1).map(u => u.Nombre);
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : `Error: ${e.message}`;
 		} finally {
@@ -70,6 +85,20 @@
 		const d = new Date(val);
 		if (isNaN(d)) return String(val);
 		return d.toLocaleString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+	}
+
+	function toInputDate(val) {
+		if (!val) return '';
+		const d = new Date(val);
+		if (isNaN(d)) return '';
+		return d.toISOString().split('T')[0];
+	}
+
+	function toInputTime(val) {
+		if (!val) return '';
+		const d = new Date(val);
+		if (isNaN(d)) return '';
+		return d.toTimeString().slice(0, 5);
 	}
 
 	function estatusHtml(est) {
@@ -147,12 +176,94 @@
 			busy = false;
 		}
 	}
+
+	// Edit mode
+	function empezarEdicion() {
+		editForm = {
+			cliente: reporte.Cliente || '',
+			contacto: reporte.Contacto || '',
+			correo_contacto: reporte.CorreoContacto || '',
+			fecha: toInputDate(reporte.Fecha),
+			tecnico: reporte.Tecnico || '',
+			descripcion: reporte.DescripcionServicio || '',
+			estatus: reporte.Estatus || 'Borrador',
+			notas: reporte.Notas || '',
+			fecha_inicio: toInputTime(reporte.FechaHoraInicio),
+			fecha_fin: toInputTime(reporte.FechaHoraFin),
+			tiempo_traslado: Number(reporte.TiempoTraslado || 0),
+			tiempo_comida: Number(reporte.TiempoComida || 0),
+			maquina_linea: reporte.MaquinaLinea || '',
+			tecnicos_adicionales: ''
+		};
+		// Cargar técnicos adicionales actuales
+		if (reporte._tecnicos_adicionales) {
+			editForm.tecnicos_adicionales = reporte._tecnicos_adicionales.join(', ');
+		}
+		editando = true;
+	}
+
+	function cancelarEdicion() {
+		editando = false;
+	}
+
+	async function guardarEdicion() {
+		if (!editForm.cliente.trim() || !editForm.tecnico.trim()) {
+			error = 'Cliente y técnico son obligatorios.';
+			return;
+		}
+		if (!editForm.fecha_inicio || !editForm.fecha_fin) {
+			error = 'Hora inicio y fin obligatorias.';
+			return;
+		}
+		error = '';
+		msg = '';
+		busy = true;
+		try {
+			const tecnicosAdic = editForm.tecnicos_adicionales
+				.split(',')
+				.map(s => s.trim())
+				.filter(Boolean);
+			const res = await fetch(`/api/reportes/${idReporte}`, {
+				method: 'PUT',
+				headers: apiHeaders(),
+				body: JSON.stringify({
+					cliente: editForm.cliente.trim(),
+					contacto: editForm.contacto.trim(),
+					correo_contacto: editForm.correo_contacto.trim(),
+					fecha: editForm.fecha,
+					tecnico: editForm.tecnico.trim(),
+					descripcion: editForm.descripcion.trim(),
+					estatus: editForm.estatus.trim(),
+					notas: editForm.notas.trim(),
+					fecha_inicio: editForm.fecha_inicio,
+					fecha_fin: editForm.fecha_fin,
+					tiempo_traslado: parseFloat(editForm.tiempo_traslado) || 0,
+					tiempo_comida: editForm.tiempo_comida ? 1 : 0,
+					maquina_linea: editForm.maquina_linea.trim(),
+					tecnicos_adicionales: tecnicosAdic
+				})
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.detail || 'Error al actualizar.');
+			msg = '✅ Reporte actualizado.';
+			editando = false;
+			await cargar();
+		} catch (e) {
+			error = e.message || 'Error al actualizar.';
+		} finally {
+			busy = false;
+		}
+	}
 </script>
 
 <div class="page">
 	<div class="header">
 		<button class="btn btn-sm btn-secondary" on:click={() => navigate('/registro_reportes')} title="Volver">⬅️</button>
 		<h1>📋 {reporte.Folio || 'Cargando…'}</h1>
+		<div style="flex:1"></div>
+		{#if !editando && !loading}
+			<button class="btn btn-sm btn-primary" on:click={empezarEdicion}>✏️ Editar</button>
+		{/if}
 	</div>
 
 	{#if loading}
@@ -169,35 +280,101 @@
 		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">📄 Datos del reporte</div>
 
-			<div class="grid-2" style="font-size: 0.9rem;">
-				<div><strong>Folio:</strong> {reporte.Folio}</div>
-				<div><strong>Estatus:</strong> {@html estatusHtml(reporte.Estatus)}</div>
-				<div><strong>Cliente:</strong> {reporte.Cliente}</div>
-				<div><strong>Fecha:</strong> {formatearFecha(reporte.Fecha)}</div>
-				<div><strong>Contacto:</strong> {reporte.Contacto || 'N/A'}</div>
-				<div><strong>Correo:</strong> {reporte.CorreoContacto || 'N/A'}</div>
-				<div><strong>Cotización Asociada:</strong> {reporte.Cotizacion || '*Sin cotización vinculada*'}</div>
-				<div><strong>Técnico:</strong> <strong>{reporte.Tecnico}</strong></div>
-				<div><strong>Máquina/Línea:</strong> {reporte.MaquinaLinea || '—'}</div>
-				<div><strong>Inicio:</strong> {formatearFecha(reporte.FechaHoraInicio)}</div>
-				<div><strong>Fin:</strong> {formatearFecha(reporte.FechaHoraFin)}</div>
-				<div><strong>Traslado:</strong> {reporte.TiempoTraslado || 0} h</div>
-				<div><strong>Comida:</strong> {reporte.TiempoComida ? 'Sí' : 'No'}</div>
-			</div>
+			{#if editando}
+				<div class="grid-2">
+					<div class="field">
+						<label>Cliente *</label>
+						<input class="input" bind:value={editForm.cliente} />
+					</div>
+					<div class="field">
+						<label>Fecha *</label>
+						<input type="date" class="input" bind:value={editForm.fecha} />
+					</div>
+				</div>
+				<div class="grid-2">
+					<div class="field">
+						<label>Contacto</label>
+						<input class="input" bind:value={editForm.contacto} />
+					</div>
+					<div class="field">
+						<label>Correo</label>
+						<input type="email" class="input" bind:value={editForm.correo_contacto} />
+					</div>
+				</div>
+				<div class="field">
+					<label>Técnico responsable *</label>
+					<select class="input" bind:value={editForm.tecnico}>
+						{#each tecnicosHub as t}
+							<option value={t}>{t}</option>
+						{/each}
+					</select>
+				</div>
+				<div class="field">
+					<label>Máquina / Línea</label>
+					<input class="input" bind:value={editForm.maquina_linea} />
+				</div>
+				<div class="field">
+					<label>Descripción *</label>
+					<textarea class="input" bind:value={editForm.descripcion} rows="4"></textarea>
+				</div>
+				<div class="field">
+					<label>Notas internas</label>
+					<textarea class="input" bind:value={editForm.notas} rows="2"></textarea>
+				</div>
+				<div class="grid-4">
+					<div class="field"><label>Hora inicio</label><input type="time" class="input" bind:value={editForm.fecha_inicio} /></div>
+					<div class="field"><label>Hora fin</label><input type="time" class="input" bind:value={editForm.fecha_fin} /></div>
+					<div class="field"><label>Traslado (h)</label><input type="number" step="0.5" min="0" class="input" bind:value={editForm.tiempo_traslado} /></div>
+					<div class="field"><label>Comida</label><select class="input" bind:value={editForm.tiempo_comida}><option value="0">No</option><option value="1">Sí</option></select></div>
+				</div>
+				<div class="field">
+					<label>Técnicos adicionales (coma)</label>
+					<input class="input" bind:value={editForm.tecnicos_adicionales} placeholder="Juan Pérez, María López…" />
+				</div>
+				<div class="field">
+					<label>Estatus</label>
+					<select class="input" bind:value={editForm.estatus}>
+						<option value="Borrador">Borrador</option>
+						<option value="En Curso">En Curso</option>
+						<option value="Firmado">Firmado</option>
+						<option value="Cancelado">Cancelado</option>
+					</select>
+				</div>
+				<div class="grid-2" style="margin-top: 0.5rem;">
+					<button class="btn btn-secondary btn-block" on:click={cancelarEdicion}>❌ Cancelar</button>
+					<button class="btn btn-primary btn-block" on:click={guardarEdicion} disabled={busy}>💾 Guardar</button>
+				</div>
+			{:else}
+				<div class="grid-2" style="font-size: 0.9rem;">
+					<div><strong>Folio:</strong> {reporte.Folio}</div>
+					<div><strong>Estatus:</strong> {@html estatusHtml(reporte.Estatus)}</div>
+					<div><strong>Cliente:</strong> {reporte.Cliente}</div>
+					<div><strong>Fecha:</strong> {formatearFecha(reporte.Fecha)}</div>
+					<div><strong>Contacto:</strong> {reporte.Contacto || 'N/A'}</div>
+					<div><strong>Correo:</strong> {reporte.CorreoContacto || 'N/A'}</div>
+					<div><strong>Cotización Asociada:</strong> {reporte.Cotizacion || '*Sin cotización vinculada*'}</div>
+					<div><strong>Técnico:</strong> <strong>{reporte.Tecnico}</strong></div>
+					<div><strong>Máquina/Línea:</strong> {reporte.MaquinaLinea || '—'}</div>
+					<div><strong>Inicio:</strong> {formatearFecha(reporte.FechaHoraInicio)}</div>
+					<div><strong>Fin:</strong> {formatearFecha(reporte.FechaHoraFin)}</div>
+					<div><strong>Traslado:</strong> {reporte.TiempoTraslado || 0} h</div>
+					<div><strong>Comida:</strong> {reporte.TiempoComida ? 'Sí' : 'No'}</div>
+				</div>
 
-			<hr style="border-color: var(--color-border); margin: 0.75rem 0;" />
+				<hr style="border-color: var(--color-border); margin: 0.75rem 0;" />
 
-			<div><strong>🛠️ Descripción del Servicio:</strong></div>
-			<div class="info-box" style="margin-top: 0.25rem;">{reporte.DescripcionServicio || '*Sin descripción registrada.*'}</div>
+				<div><strong>🛠️ Descripción del Servicio:</strong></div>
+				<div class="info-box" style="margin-top: 0.25rem;">{reporte.DescripcionServicio || '*Sin descripción registrada.*'}</div>
 
-			{#if reporte.Notas}
-				<div style="margin-top: 0.75rem;"><strong>📝 Notas:</strong></div>
-				<div class="info-box" style="margin-top: 0.25rem;">{reporte.Notas}</div>
-			{/if}
+				{#if reporte.Notas}
+					<div style="margin-top: 0.75rem;"><strong>📝 Notas:</strong></div>
+					<div class="info-box" style="margin-top: 0.25rem;">{reporte.Notas}</div>
+				{/if}
 
-			{#if reporte.FirmaConformidad}
-				<div style="margin-top: 0.75rem;"><strong>✍️ Firma de Conformidad:</strong></div>
-				<img src="data:image/png;base64,{reporte.FirmaConformidad}" alt="Firma" style="margin-top: 0.25rem; max-width: 280px; border: 1px solid var(--color-border); border-radius: 8px;" />
+				{#if reporte.FirmaConformidad}
+					<div style="margin-top: 0.75rem;"><strong>✍️ Firma de Conformidad:</strong></div>
+					<img src="data:image/png;base64,{reporte.FirmaConformidad}" alt="Firma" style="margin-top: 0.25rem; max-width: 280px; border: 1px solid var(--color-border); border-radius: 8px;" />
+				{/if}
 			{/if}
 		</div>
 

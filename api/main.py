@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.responses import JSONResponse, Response
 from api.pdf_cotizacion import build_cotizacion_pdf
+from api.pdf_reporte import build_service_report_pdf
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import pymssql
@@ -1797,12 +1798,12 @@ async def api_save_firma(id_reporte: int, body: ReporteSignatureSave, current_us
 
 @app.get("/api/reportes/{id_reporte}/pdf")
 async def api_reporte_pdf(id_reporte: int, request: Request, current_user: dict = Depends(_user_from_header_or_query)):
-    """Genera PDF del reporte de servicio (misma estética que HUB)."""
+    """Genera PDF del reporte de servicio IDÉNTICO al HUB (pdf_generator.generate_service_report_pdf)."""
     _require_reporte(current_user)
     try:
-        # Build report data (reuse pdf_generator later; for now return bytes from template)
         conn = get_connection()
         cursor = conn.cursor()
+        # Reporte completo
         cursor.execute("""
             SELECT IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
                    DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
@@ -1810,45 +1811,53 @@ async def api_reporte_pdf(id_reporte: int, request: Request, current_user: dict 
             FROM ReportesServicio WHERE IdReporte = %s
         """, (int(id_reporte),))
         row = cursor.fetchone()
-        conn.close()
         if not row:
+            conn.close()
             raise HTTPException(status_code=404, detail="Reporte no encontrado")
 
-        # For now return a simple placeholder PDF - will enhance with full PDF generator
-        import io
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        buffer = io.BytesIO()
-        c = canvas.Canvas(buffer, pagesize=letter)
-        width, height = letter
-        y = height - 50
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(50, y, f"Reporte de Servicio: {row[1]}")
-        y -= 30
-        c.setFont("Helvetica", 10)
-        for label, val in [
-            ("Folio", row[1]), ("Cliente", row[2]), ("Contacto", row[3]), ("Correo", row[4]),
-            ("Fecha", str(row[5])), ("Técnico", row[6]), ("Máquina/Línea", row[10]),
-            ("Inicio", str(row[11])), ("Fin", str(row[12])), ("Traslado", str(row[13])),
-            ("Comida", "Sí" if row[14] else "No"), ("Estatus", row[8]),
-        ]:
-            c.drawString(50, y, f"{label}: {val or '-'}")
-            y -= 18
-        y -= 10
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y, "Descripción:")
-        y -= 16
-        c.setFont("Helvetica", 10)
-        for line in (row[7] or "").split("\n"):
-            c.drawString(60, y, line)
-            y -= 14
-        if row[15]:  # firma
-            y -= 10
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(50, y, "Firma de conformidad: SÍ")
-        c.save()
-        pdf_bytes = buffer.getvalue()
-        buffer.close()
+        # Técnicos adicionales
+        cursor.execute("""
+            SELECT u.Nombre FROM ReportesServicioTecnicos t
+            INNER JOIN HUB_Users u ON u.Id = t.IdUsuario
+            WHERE t.IdReporte = %s
+        """, (int(id_reporte),))
+        tecnicos_rows = cursor.fetchall()
+        tecnicos_adicionales = [r[0] for r in tecnicos_rows if r[0] != row[6]]  # excluir técnico principal
+
+        # Fotos
+        cursor.execute("SELECT IdFoto, FotoComprimida, Orden FROM ReportesServicioFotos WHERE IdReporte = %s ORDER BY Orden", (int(id_reporte),))
+        fotos_rows = cursor.fetchall()
+        fotos = [{"FotoComprimida": r[1], "Orden": r[2]} for r in fotos_rows]
+
+        # Nombre del cliente (razón social)
+        cursor.execute("SELECT Cliente FROM clientes WHERE IdCliente = %s", (row[2],))
+        cliente_row = cursor.fetchone()
+        cliente_nombre = cliente_row[0] if cliente_row else None
+
+        conn.close()
+
+        # Build report dict compatible with HUB pdf_generator
+        report = {
+            "IdReporte": row[0],
+            "Folio": row[1],
+            "Cliente": row[2],
+            "Contacto": row[3],
+            "CorreoContacto": row[4],
+            "Fecha": row[5],
+            "Tecnico": row[6],
+            "DescripcionServicio": row[7],
+            "Estatus": row[8],
+            "Notas": row[9],
+            "MaquinaLinea": row[10],
+            "FechaHoraInicio": row[11],
+            "FechaHoraFin": row[12],
+            "TiempoTraslado": row[13],
+            "TiempoComida": row[14],
+            "FirmaConformidad": row[15],
+            "Cotizacion": row[16],
+        }
+
+        pdf_bytes = build_service_report_pdf(report, tecnicos_adicionales=tecnicos_adicionales, fotos=fotos, cliente_nombre=cliente_nombre)
         return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{row[1]}.pdf"'})
     except HTTPException:
         raise
@@ -1858,57 +1867,61 @@ async def api_reporte_pdf(id_reporte: int, request: Request, current_user: dict 
 
 @app.get("/api/reportes/{id_reporte}/enviar")
 async def api_reporte_enviar(id_reporte: int, email: str, current_user: dict = Depends(get_current_user)):
-    """Envía PDF del reporte por email (adjunto)."""
+    """Envía PDF del reporte por email (adjunto) — usa el mismo PDF IDÉNTICO al HUB."""
     _require_reporte(current_user)
     try:
-        # Generate PDF
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+            SELECT IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
                    DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
-                   TiempoTraslado, TiempoComida, FirmaConformidad
+                   TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
             FROM ReportesServicio WHERE IdReporte = %s
         """, (int(id_reporte),))
         row = cursor.fetchone()
-        conn.close()
         if not row:
+            conn.close()
             raise HTTPException(status_code=404, detail="Reporte no encontrado")
 
-        import io
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        buffer = io.BytesIO()
-        c = canvas.Canvas(buffer, pagesize=letter)
-        width, height = letter
-        y = height - 50
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(50, y, f"Reporte de Servicio: {row[0]}")
-        y -= 30
-        c.setFont("Helvetica", 10)
-        for label, val in [
-            ("Folio", row[0]), ("Cliente", row[1]), ("Contacto", row[2]), ("Correo", row[3]),
-            ("Fecha", str(row[4])), ("Técnico", row[5]), ("Máquina/Línea", row[9]),
-            ("Inicio", str(row[10])), ("Fin", str(row[11])), ("Traslado", str(row[12])),
-            ("Comida", "Sí" if row[13] else "No"), ("Estatus", row[7]),
-        ]:
-            c.drawString(50, y, f"{label}: {val or '-'}")
-            y -= 18
-        y -= 10
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(50, y, "Descripción:")
-        y -= 16
-        c.setFont("Helvetica", 10)
-        for line in (row[6] or "").split("\n"):
-            c.drawString(60, y, line)
-            y -= 14
-        if row[14]:  # firma
-            y -= 10
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(50, y, "Firma de conformidad: SÍ")
-        c.save()
-        pdf_bytes = buffer.getvalue()
-        buffer.close()
+        cursor.execute("""
+            SELECT u.Nombre FROM ReportesServicioTecnicos t
+            INNER JOIN HUB_Users u ON u.Id = t.IdUsuario
+            WHERE t.IdReporte = %s
+        """, (int(id_reporte),))
+        tecnicos_rows = cursor.fetchall()
+        tecnicos_adicionales = [r[0] for r in tecnicos_rows if r[0] != row[6]]
+
+        cursor.execute("SELECT IdFoto, FotoComprimida, Orden FROM ReportesServicioFotos WHERE IdReporte = %s ORDER BY Orden", (int(id_reporte),))
+        fotos_rows = cursor.fetchall()
+        fotos = [{"FotoComprimida": r[1], "Orden": r[2]} for r in fotos_rows]
+
+        cursor.execute("SELECT Cliente FROM clientes WHERE IdCliente = %s", (row[2],))
+        cliente_row = cursor.fetchone()
+        cliente_nombre = cliente_row[0] if cliente_row else None
+
+        conn.close()
+
+        report = {
+            "IdReporte": row[0],
+            "Folio": row[1],
+            "Cliente": row[2],
+            "Contacto": row[3],
+            "CorreoContacto": row[4],
+            "Fecha": row[5],
+            "Tecnico": row[6],
+            "DescripcionServicio": row[7],
+            "Estatus": row[8],
+            "Notas": row[9],
+            "MaquinaLinea": row[10],
+            "FechaHoraInicio": row[11],
+            "FechaHoraFin": row[12],
+            "TiempoTraslado": row[13],
+            "TiempoComida": row[14],
+            "FirmaConformidad": row[15],
+            "Cotizacion": row[16],
+        }
+
+        pdf_bytes = build_service_report_pdf(report, tecnicos_adicionales=tecnicos_adicionales, fotos=fotos, cliente_nombre=cliente_nombre)
 
         # Send email
         import smtplib
@@ -1922,12 +1935,12 @@ async def api_reporte_enviar(id_reporte: int, email: str, current_user: dict = D
         smtp_pass = os.getenv("HUB_SMTP_PASSWORD", "eyccazo")
 
         msg = MIMEMultipart()
-        msg["Subject"] = f"Reporte de Servicio {row[0]} - {row[1]}"
+        msg["Subject"] = f"Reporte de Servicio {row[1]} - {row[2]}"
         msg["From"] = smtp_user
         msg["To"] = email
-        msg.attach(MIMEText(f"Adjunto reporte de servicio {row[0]} para el cliente {row[1]}.", "plain"))
+        msg.attach(MIMEText(f"Adjunto reporte de servicio {row[1]} para el cliente {row[2]}.", "plain"))
         att = MIMEApplication(pdf_bytes, _subtype="pdf")
-        att.add_header("Content-Disposition", "attachment", filename=f"{row[0]}.pdf")
+        att.add_header("Content-Disposition", "attachment", filename=f"{row[1]}.pdf")
         msg.attach(att)
 
         with smtplib.SMTP(smtp_host, smtp_port) as server:
