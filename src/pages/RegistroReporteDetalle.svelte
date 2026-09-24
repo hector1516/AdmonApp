@@ -23,6 +23,7 @@
 	// PDF blob for download/share (evita abrir en otra ventana)
 	let pdfBlob = $state(null);
 	let pdfLoading = $state(false);
+	let showPdfPreview = $state(false);
 
 	// Edit mode
 	let editando = $state(false);
@@ -159,6 +160,15 @@
 			// Fallback: descargar
 			await descargarPDF();
 		}
+	}
+
+	function abrirPreview() {
+		if (!pdfBlob) return;
+		showPdfPreview = true;
+	}
+
+	function cerrarPreview() {
+		showPdfPreview = false;
 	}
 
 	// Alias para compatibilidad
@@ -500,12 +510,15 @@
 
 		<!-- Acciones -->
 		<div class="card">
-			<div class="grid-2">
+			<div class="grid-3">
 				<button class="btn btn-primary btn-block" on:click={descargarPDF} disabled={pdfLoading}>
 					{pdfLoading ? '⏳ Cargando…' : '📥 Descargar PDF'}
 				</button>
 				<button class="btn btn-secondary btn-block" on:click={compartirPDF} disabled={pdfLoading}>
 					📤 Compartir
+				</button>
+				<button class="btn btn-info btn-block" on:click={abrirPreview} disabled={pdfLoading || !pdfBlob}>
+					👁️ Previsualizar
 				</button>
 			</div>
 			<div class="grid-2" style="margin-top: 0.5rem;">
@@ -513,10 +526,29 @@
 					<button class="btn btn-success btn-block" on:click={restaurar} disabled={busy}>♻️ Restaurar</button>
 					<button class="btn btn-danger btn-block" on:click={eliminarDefinitivo} disabled={busy}>💀 Eliminar definitivamente</button>
 				{:else}
-					<button class="btn btn-warning btn-block" on:click={moverAPapelera} disabled={busy}>🗑️ Mover a papelera</button>
+					<button class="btn btn-danger btn-block" on:click={moverAPapelera} disabled={busy}>🗑️ Mover a papelera</button>
 				{/if}
 			</div>
 		</div>
+
+		<!-- PDF Preview Modal -->
+		{#if showPdfPreview}
+			<div class="modal-overlay" on:click={cerrarPreview}>
+				<div class="modal modal-large" on:click={(e) => e.stopPropagation()}>
+					<div class="modal-header">
+						<h3>👁️ Previsualizar: {reporte.Folio}</h3>
+						<button class="btn btn-sm btn-ghost" on:click={cerrarPreview}>✕</button>
+					</div>
+					<div class="modal-body" style="padding: 0; height: 70vh;">
+						<iframe 
+							src={URL.createObjectURL(pdfBlob)} 
+							style="width: 100%; height: 100%; border: none;"
+							title="PDF Preview"
+						></iframe>
+					</div>
+				</div>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -527,4 +559,11 @@
 	.msg.ok { background: rgba(34,197,94,0.1); color: #22C55E; }
 	.info-box { padding: 0.75rem; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid var(--color-border); white-space: pre-wrap; font-size: 0.85rem; }
 	.badge { padding: 0.1rem 0.5rem; border-radius: 12px; font-weight: 600; font-size: 0.7rem; color: #fff; }
+	.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+	.modal { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 16px; max-width: 900px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; }
+	.modal-large { max-width: 95vw; }
+	.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid var(--color-border); }
+	.modal-header h3 { margin: 0; font-size: 1.1rem; }
+	.modal-body { flex: 1; overflow: auto; }
+	.btn-ghost { background: transparent; border: none; color: var(--color-text-muted); cursor: pointer; padding: 0.5rem; }
 </style>
