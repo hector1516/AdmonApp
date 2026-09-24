@@ -48,6 +48,8 @@ class UserInfo(BaseModel):
     acceso_calculo: bool = False
     acceso_telegram: bool = False
     acceso_usuarios: bool = False
+    acceso_reportes: bool = False
+    acceso_registro_reportes: bool = False
 
 
 # --- Auth Dependency ---
@@ -61,7 +63,7 @@ def _user_from_token(token: str):
         email = parts[0]
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -77,6 +79,8 @@ def _user_from_token(token: str):
                 "acceso_calculo": row[8] == 1,
                 "acceso_telegram": row[9] == 1,
                 "acceso_usuarios": row[10] == 1,
+                "acceso_reportes": row[11] == 1,
+                "acceso_registro_reportes": row[12] == 1,
             }
         return None
     except Exception as e:
@@ -174,6 +178,7 @@ def _build_login_response(email: str, row) -> dict:
         "acceso_cotizaciones": b(7), "acceso_proveedores": b(8),
         "acceso_oc": b(9), "acceso_calculo": b(10),
         "acceso_telegram": b(11), "acceso_usuarios": b(12),
+        "acceso_reportes": b(13), "acceso_registro_reportes": b(14),
     }
     return {"token": token, "user": user, "expiresAt": expires_at}
 
@@ -187,7 +192,7 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row and row[4] and row[3] == body.password:
@@ -1443,6 +1448,500 @@ async def generate_pdf(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+# ===== REPORTES DE SERVICIO (AccesoRegistroReportes / AccesoReportes) =====
+
+class ReporteCreate(BaseModel):
+    cliente: str
+    contacto: str = ""
+    correo_contacto: str = ""
+    fecha: str  # YYYY-MM-DD
+    tecnico: str
+    descripcion: str = ""
+    notas: str = ""
+    fecha_inicio: str  # HH:MM
+    fecha_fin: str  # HH:MM
+    tiempo_traslado: float = 0.0
+    tiempo_comida: int = 0
+    maquina_linea: str = ""
+    tecnicos_adicionales: List[str] = []
+
+
+class ReporteUpdate(BaseModel):
+    cliente: str = ""
+    contacto: str = ""
+    correo_contacto: str = ""
+    fecha: str = ""
+    tecnico: str = ""
+    descripcion: str = ""
+    estatus: str = ""
+    notas: str = ""
+    fecha_inicio: str = ""
+    fecha_fin: str = ""
+    tiempo_traslado: float = 0.0
+    tiempo_comida: int = 0
+    maquina_linea: str = ""
+    tecnicos_adicionales: List[str] = []
+
+
+class ReporteFotosSave(BaseModel):
+    fotos: List[str]  # base64 strings
+
+
+class ReporteTecnicosSave(BaseModel):
+    tecnicos: List[str]
+
+
+class ReporteSignatureSave(BaseModel):
+    signature_base64: str
+
+
+def _require_reporte(current_user: dict):
+    if not (current_user.get("acceso_registro_reportes") or current_user.get("acceso_reportes")):
+        raise HTTPException(status_code=403, detail="Requiere permiso de Reportes de Servicio")
+
+
+def _folio_from_id(cur, next_id: int) -> str:
+    return f"RS-{str(next_id).zfill(5)}"
+
+
+@app.get("/api/reportes")
+async def api_list_reportes(tecnico: str = "", current_user: dict = Depends(get_current_user)):
+    """Lista reportes (top 500). Filtra por técnico si se pasa."""
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        if tecnico:
+            cursor.execute("""
+                SELECT IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+                       DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
+                       TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
+                FROM ReportesServicio
+                WHERE Tecnico = %s
+                   OR IdReporte IN (SELECT IdReporte FROM ReportesServicioTecnicos
+                                    INNER JOIN HUB_Users u ON u.Id = ReportesServicioTecnicos.IdUsuario
+                                    WHERE u.Nombre = %s)
+                ORDER BY Fecha DESC, IdReporte DESC
+            """, (tecnico.strip(), tecnico.strip()))
+        else:
+            cursor.execute("""
+                SELECT TOP 500 IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+                       DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
+                       TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
+                FROM ReportesServicio
+                ORDER BY Fecha DESC, IdReporte DESC
+            """)
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(zip([c[0] for c in cursor.description], r)) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/reportes/{id_reporte}")
+async def api_get_reporte(id_reporte: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+                   DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
+                   TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
+            FROM ReportesServicio
+            WHERE IdReporte = %s
+        """, (int(id_reporte),))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Reporte no encontrado")
+        return dict(zip([c[0] for c in cursor.description], row))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/reportes")
+async def api_create_reporte(body: ReporteCreate, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT ISNULL(MAX(IdReporte), 0) + 1 FROM ReportesServicio")
+        row = cursor.fetchone()
+        next_id = int(row[0]) if row else 1
+        folio = f"RS-{str(next_id).zfill(5)}"
+
+        fecha_str = str(body.fecha)
+        cursor.execute("""
+            INSERT INTO ReportesServicio (
+                Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+                DescripcionServicio, Estatus, Notas, MaquinaLinea,
+                FechaHoraInicio, FechaHoraFin, TiempoTraslado, TiempoComida
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Borrador', %s, %s, %s, %s, %s, %s)
+        """, (
+            folio,
+            body.cliente.strip(),
+            body.contacto.strip() if body.contacto else None,
+            body.correo_contacto.strip() if body.correo_contacto else None,
+            fecha_str,
+            body.tecnico.strip(),
+            body.descripcion.strip() if body.descripcion else None,
+            body.notas.strip() if body.notas else None,
+            body.maquina_linea.strip() if body.maquina_linea else None,
+            body.fecha_inicio,
+            body.fecha_fin,
+            float(body.tiempo_traslado or 0.0),
+            1 if body.tiempo_comida else 0,
+        ))
+        conn.commit()
+        cursor.execute("SELECT SCOPE_IDENTITY()")
+        row = cursor.fetchone()
+        id_reporte = int(row[0]) if row and row[0] else None
+
+        # Tecnicos adicionales
+        if id_reporte and body.tecnicos_adicionales:
+            for t in body.tecnicos_adicionales:
+                cursor.execute("SELECT Id FROM HUB_Users WHERE Nombre = %s", (t.strip(),))
+                ur = cursor.fetchone()
+                if ur:
+                    cursor.execute("INSERT INTO ReportesServicioTecnicos (IdReporte, IdUsuario) VALUES (%s, %s)", (id_reporte, ur[0]))
+            conn.commit()
+
+        conn.close()
+        return {"ok": True, "folio": folio, "id_reporte": id_reporte}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/reportes/{id_reporte}")
+async def api_update_reporte(id_reporte: int, body: ReporteUpdate, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # Build dynamic update
+        fields = []
+        vals = []
+        if body.cliente:
+            fields.append("Cliente = %s"); vals.append(body.cliente.strip())
+        if body.contacto is not None:
+            fields.append("Contacto = %s"); vals.append(body.contacto.strip() if body.contacto else None)
+        if body.correo_contacto is not None:
+            fields.append("CorreoContacto = %s"); vals.append(body.correo_contacto.strip() if body.correo_contacto else None)
+        if body.fecha:
+            fields.append("Fecha = %s"); vals.append(str(body.fecha))
+        if body.tecnico:
+            fields.append("Tecnico = %s"); vals.append(body.tecnico.strip())
+        if body.descripcion is not None:
+            fields.append("DescripcionServicio = %s"); vals.append(body.descripcion.strip() if body.descripcion else None)
+        if body.estatus:
+            fields.append("Estatus = %s"); vals.append(body.estatus.strip())
+        if body.notas is not None:
+            fields.append("Notas = %s"); vals.append(body.notas.strip() if body.notas else None)
+        if body.maquina_linea is not None:
+            fields.append("MaquinaLinea = %s"); vals.append(body.maquina_linea.strip() if body.maquina_linea else None)
+        if body.fecha_inicio:
+            fields.append("FechaHoraInicio = %s"); vals.append(body.fecha_inicio)
+        if body.fecha_fin:
+            fields.append("FechaHoraFin = %s"); vals.append(body.fecha_fin)
+        if body.tiempo_traslado is not None:
+            fields.append("TiempoTraslado = %s"); vals.append(float(body.tiempo_traslado or 0.0))
+        if body.tiempo_comida is not None:
+            fields.append("TiempoComida = %s"); vals.append(1 if body.tiempo_comida else 0)
+
+        if fields:
+            vals.append(int(id_reporte))
+            cursor.execute(f"UPDATE ReportesServicio SET {', '.join(fields)} WHERE IdReporte = %s", tuple(vals))
+
+        # Tecnicos adicionales (replace)
+        if body.tecnicos_adicionales is not None:
+            cursor.execute("DELETE FROM ReportesServicioTecnicos WHERE IdReporte = %s", (int(id_reporte),))
+            for t in body.tecnicos_adicionales:
+                cursor.execute("SELECT Id FROM HUB_Users WHERE Nombre = %s", (t.strip(),))
+                ur = cursor.fetchone()
+                if ur:
+                    cursor.execute("INSERT INTO ReportesServicioTecnicos (IdReporte, IdUsuario) VALUES (%s, %s)", (id_reporte, ur[0]))
+
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/reportes/{id_reporte}")
+async def api_delete_reporte(id_reporte: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Folio FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
+        row = cursor.fetchone()
+        folio = row[0] if row else str(id_reporte)
+        cursor.execute("DELETE FROM ReportesServicioFotos WHERE IdReporte = %s", (int(id_reporte),))
+        cursor.execute("DELETE FROM ReportesServicioTecnicos WHERE IdReporte = %s", (int(id_reporte),))
+        cursor.execute("DELETE FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "folio": folio}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/reportes/{id_reporte}/fotos")
+async def api_get_fotos(id_reporte: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT IdFoto, FotoComprimida, Orden FROM ReportesServicioFotos WHERE IdReporte = %s ORDER BY Orden", (int(id_reporte),))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": r[0], "base64": r[1], "orden": r[2]} for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/reportes/{id_reporte}/fotos")
+async def api_save_fotos(id_reporte: int, body: ReporteFotosSave, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ReportesServicioFotos WHERE IdReporte = %s", (int(id_reporte),))
+        for i, b64 in enumerate(body.fotos):
+            cursor.execute("INSERT INTO ReportesServicioFotos (IdReporte, FotoComprimida, Orden) VALUES (%s, %s, %s)", (int(id_reporte), b64, i))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "guardadas": len(body.fotos)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/reportes/{id_reporte}/fotos/{id_foto}")
+async def api_delete_foto(id_reporte: int, id_foto: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ReportesServicioFotos WHERE IdFoto = %s AND IdReporte = %s", (int(id_foto), int(id_reporte)))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/reportes/{id_reporte}/tecnicos")
+async def api_get_tecnicos(id_reporte: int, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT u.Nombre FROM ReportesServicioTecnicos t
+            INNER JOIN HUB_Users u ON u.Id = t.IdUsuario
+            WHERE t.IdReporte = %s
+        """, (int(id_reporte),))
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/reportes/{id_reporte}/tecnicos")
+async def api_save_tecnicos(id_reporte: int, body: ReporteTecnicosSave, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ReportesServicioTecnicos WHERE IdReporte = %s", (int(id_reporte),))
+        for t in body.tecnicos:
+            cursor.execute("SELECT Id FROM HUB_Users WHERE Nombre = %s", (t.strip(),))
+            ur = cursor.fetchone()
+            if ur:
+                cursor.execute("INSERT INTO ReportesServicioTecnicos (IdReporte, IdUsuario) VALUES (%s, %s)", (int(id_reporte), ur[0]))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "guardados": len(body.tecnicos)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/reportes/{id_reporte}/firma")
+async def api_save_firma(id_reporte: int, body: ReporteSignatureSave, current_user: dict = Depends(get_current_user)):
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE ReportesServicio SET FirmaConformidad = %s, Estatus = 'Firmado' WHERE IdReporte = %s", (body.signature_base64, int(id_reporte)))
+        conn.commit()
+        cursor.execute("SELECT Folio FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
+        row = cursor.fetchone()
+        conn.close()
+        return {"ok": True, "folio": row[0] if row else ""}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/reportes/{id_reporte}/pdf")
+async def api_reporte_pdf(id_reporte: int, request: Request, current_user: dict = Depends(_user_from_header_or_query)):
+    """Genera PDF del reporte de servicio (misma estética que HUB)."""
+    _require_reporte(current_user)
+    try:
+        # Build report data (reuse pdf_generator later; for now return bytes from template)
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT IdReporte, Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+                   DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
+                   TiempoTraslado, TiempoComida, FirmaConformidad, Cotizacion
+            FROM ReportesServicio WHERE IdReporte = %s
+        """, (int(id_reporte),))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Reporte no encontrado")
+
+        # For now return a simple placeholder PDF - will enhance with full PDF generator
+        import io
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=letter)
+        width, height = letter
+        y = height - 50
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(50, y, f"Reporte de Servicio: {row[1]}")
+        y -= 30
+        c.setFont("Helvetica", 10)
+        for label, val in [
+            ("Folio", row[1]), ("Cliente", row[2]), ("Contacto", row[3]), ("Correo", row[4]),
+            ("Fecha", str(row[5])), ("Técnico", row[6]), ("Máquina/Línea", row[10]),
+            ("Inicio", str(row[11])), ("Fin", str(row[12])), ("Traslado", str(row[13])),
+            ("Comida", "Sí" if row[14] else "No"), ("Estatus", row[8]),
+        ]:
+            c.drawString(50, y, f"{label}: {val or '-'}")
+            y -= 18
+        y -= 10
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(50, y, "Descripción:")
+        y -= 16
+        c.setFont("Helvetica", 10)
+        for line in (row[7] or "").split("\n"):
+            c.drawString(60, y, line)
+            y -= 14
+        if row[15]:  # firma
+            y -= 10
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(50, y, "Firma de conformidad: SÍ")
+        c.save()
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{row[1]}.pdf"'})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando PDF: {str(e)}")
+
+
+@app.get("/api/reportes/{id_reporte}/enviar")
+async def api_reporte_enviar(id_reporte: int, email: str, current_user: dict = Depends(get_current_user)):
+    """Envía PDF del reporte por email (adjunto)."""
+    _require_reporte(current_user)
+    try:
+        # Generate PDF
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT Folio, Cliente, Contacto, CorreoContacto, Fecha, Tecnico,
+                   DescripcionServicio, Estatus, Notas, MaquinaLinea, FechaHoraInicio, FechaHoraFin,
+                   TiempoTraslado, TiempoComida, FirmaConformidad
+            FROM ReportesServicio WHERE IdReporte = %s
+        """, (int(id_reporte),))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Reporte no encontrado")
+
+        import io
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=letter)
+        width, height = letter
+        y = height - 50
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(50, y, f"Reporte de Servicio: {row[0]}")
+        y -= 30
+        c.setFont("Helvetica", 10)
+        for label, val in [
+            ("Folio", row[0]), ("Cliente", row[1]), ("Contacto", row[2]), ("Correo", row[3]),
+            ("Fecha", str(row[4])), ("Técnico", row[5]), ("Máquina/Línea", row[9]),
+            ("Inicio", str(row[10])), ("Fin", str(row[11])), ("Traslado", str(row[12])),
+            ("Comida", "Sí" if row[13] else "No"), ("Estatus", row[7]),
+        ]:
+            c.drawString(50, y, f"{label}: {val or '-'}")
+            y -= 18
+        y -= 10
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(50, y, "Descripción:")
+        y -= 16
+        c.setFont("Helvetica", 10)
+        for line in (row[6] or "").split("\n"):
+            c.drawString(60, y, line)
+            y -= 14
+        if row[14]:  # firma
+            y -= 10
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(50, y, "Firma de conformidad: SÍ")
+        c.save()
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+
+        # Send email
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.application import MIMEApplication
+        from email.mime.text import MIMEText
+
+        smtp_host = os.getenv("HUB_SMTP_SERVER", "smtp.office365.com")
+        smtp_port = int(os.getenv("HUB_SMTP_PORT", "587"))
+        smtp_user = os.getenv("HUB_SMTP_USER", "sistemas@ecc-sa.com.mx")
+        smtp_pass = os.getenv("HUB_SMTP_PASSWORD", "eyccazo")
+
+        msg = MIMEMultipart()
+        msg["Subject"] = f"Reporte de Servicio {row[0]} - {row[1]}"
+        msg["From"] = smtp_user
+        msg["To"] = email
+        msg.attach(MIMEText(f"Adjunto reporte de servicio {row[0]} para el cliente {row[1]}.", "plain"))
+        att = MIMEApplication(pdf_bytes, _subtype="pdf")
+        att.add_header("Content-Disposition", "attachment", filename=f"{row[0]}.pdf")
+        msg.attach(att)
+
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+
+        return {"ok": True, "message": f"Enviado a {email}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error enviando email: {str(e)}")
+
+
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
 # El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque
 # (definido AL FINAL para no tapar las rutas de la API) sirve:
@@ -1460,7 +1959,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "reportes", "reporte_nuevo", "reporte_detalle"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}
