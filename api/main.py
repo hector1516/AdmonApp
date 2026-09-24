@@ -82,9 +82,11 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 # --- Root / health (sin auth, para Docker HEALTHCHECK y pruebas) ---
+# Si existe el frontend compilado (dist/), "/" sirve la SPA; la info JSON
+# de la API se mueve a "/api". Sin dist/, "/" sigue devolviendo JSON.
 
-@app.get("/")
-async def root():
+@app.get("/api")
+async def api_info():
     return {"message": "HUB Admon API", "version": "1.0.0"}
 
 
@@ -476,23 +478,47 @@ async def generate_pdf(current_user: dict = Depends(get_current_user)):
 
 
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
-# El build de Vite genera dist/. En Docker se compila el frontend y este
-# bloque lo sirve desde el mismo uvicorn (un solo puerto: 8000).
+# El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque
+# (definido AL FINAL para no tapar las rutas de la API) sirve:
+#   "/"            -> index.html de la SPA (o JSON si no hay dist/)
+#   "/assets/..."  -> archivos estáticos del build
+#   "/admon_logo.png", favicon, etc. -> archivos de dist/
+#   "/login", "/dashboard", ... -> index.html (client-side routing)
 try:
     from pathlib import Path
     from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
 
     _dist = Path(__file__).resolve().parent.parent / "dist"
-    if _dist.is_dir() and (_dist / "index.html").exists():
+    _has_spa = _dist.is_dir() and (_dist / "index.html").exists()
+    if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-        @app.get("/app/{full_path:path}")
-        async def spa_fallback(full_path: str):
-            candidate = _dist / full_path
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones_materiales", "telegram", "config"}
+
+    @app.get("/")
+    async def spa_root():
+        if _has_spa:
+            return FileResponse(str(_dist / "index.html"))
+        return {"message": "HUB Admon API", "version": "1.0.0"}
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        # 1) Archivo real de dist/ (logo, favicon, etc.)
+        if _has_spa:
+            candidate = (_dist / full_path)
+            try:
+                # Evitar path traversal fuera de dist/
+                candidate.resolve().relative_to(_dist.resolve())
+            except ValueError:
+                raise HTTPException(status_code=404, detail="Not found")
             if full_path and candidate.is_file():
                 return FileResponse(str(candidate))
-            return FileResponse(str(_dist / "index.html"))
+            # 2) Ruta de la SPA -> index.html (el router del frontend decide)
+            first = full_path.split("/", 1)[0]
+            if first in _SPA_ROUTES:
+                return FileResponse(str(_dist / "index.html"))
+        raise HTTPException(status_code=404, detail="Not found")
 except Exception:
     pass
 
