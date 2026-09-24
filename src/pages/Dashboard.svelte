@@ -3,8 +3,31 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 
+	// Menú de módulos estilo Field: icon/title/desc/path/perm.
+	// listo=true navega; listo=false muestra badge PRONTO (aún no funciona).
+	const modules = [
+		{ icon: '📦', title: 'Cotizaciones Materiales', desc: 'Crear y gestionar', path: '/cotizaciones_materiales', perm: 'acceso_cotizaciones', listo: true },
+		{ icon: '👥', title: 'Administrador de Usuarios', desc: 'Usuarios y permisos', path: '/usuarios', perm: 'acceso_usuarios', listo: true },
+		{ icon: '📱', title: 'Telegram', desc: 'Bot y alertas', path: '/telegram', perm: 'acceso_telegram', listo: true },
+		{ icon: '🧮', title: 'Cálculos de Cotización', desc: 'Motor de cálculo', path: '', perm: 'acceso_calculo', listo: false },
+		{ icon: '🏗️', title: 'Cotiz. Servicios y Proyectos', desc: 'Folio CSP', path: '', perm: 'acceso_cotizaciones', listo: false },
+		{ icon: '📋', title: 'Inventario', desc: 'Stock y categorías', path: '', perm: 'acceso_inventario', listo: false },
+		{ icon: '💰', title: 'Nóminas', desc: 'Sueldos semanales', path: '', perm: 'acceso_nominas', listo: false },
+		{ icon: '🏭', title: 'Proveedores', desc: 'Catálogo PROV', path: '', perm: 'acceso_proveedores', listo: false },
+		{ icon: '🧾', title: 'Órdenes de Compra', desc: 'Folio OC', path: '', perm: 'acceso_oc', listo: false },
+		{ icon: '⚙️', title: 'Configuración', desc: 'Sistema y PWA', path: '/config', perm: null, listo: true }
+	];
+
 	let kpis = [];
-	let canAdminUsers = false;
+	let user = null;
+
+	function visible(mod) {
+		return !mod.perm || (user && user[mod.perm]);
+	}
+
+	function go(mod) {
+		if (mod.listo && mod.path) navigate(mod.path);
+	}
 
 	onMount(async () => {
 		if (!auth.isLoggedIn()) {
@@ -13,10 +36,9 @@
 		}
 		try {
 			const raw = localStorage.getItem('admon_user');
-			const u = raw ? JSON.parse(raw) : null;
-			canAdminUsers = !!(u && u.acceso_usuarios);
+			user = raw ? JSON.parse(raw) : null;
 		} catch {
-			canAdminUsers = false;
+			user = null;
 		}
 		try {
 			const res = await fetch('/dashboard/kpis', { headers: auth.authHeader() });
@@ -31,15 +53,13 @@
 			console.error('Error cargando KPIs:', e);
 		}
 	});
-
-	function go(path) {
-		navigate(path);
-	}
 </script>
 
 <div class="page">
 	<div class="header">
-		<h1>📊 Panel de Administración</h1>
+		<div class="brand-col">
+			<h1 class="brand"><img class="brand-logo" src="/admon_logo.png" alt="Admon" /> Admon</h1>
+		</div>
 	</div>
 
 	{#if kpis.length > 0}
@@ -53,38 +73,51 @@
 		</div>
 	{/if}
 
-	{#if canAdminUsers}
-		<div class="card" style="margin-bottom: 0.75rem; border-color: rgba(255, 107, 0, 0.35);">
-			<h3 style="margin: 0 0 0.5rem; font-size: 0.95rem;">👥 Administración</h3>
-			<button type="button" class="btn btn-primary btn-block" on:click={() => go('/usuarios')}>
-				👥 Administrador de usuarios
-			</button>
-		</div>
-	{/if}
-
-	<div class="card" style="margin-bottom: 0.75rem;">
-		<h3 style="margin: 0 0 0.75rem; font-size: 0.95rem;">Accesos rápidos</h3>
-		<div class="list">
-			<button type="button" class="list-card" on:click={() => go('/cotizaciones_materiales')}>
-				<span>📦 Cotizaciones Materiales</span><span>›</span>
-			</button>
-			<button type="button" class="list-card" on:click={() => go('/telegram')}>
-				<span>📱 Telegram</span><span>›</span>
-			</button>
-			<button type="button" class="list-card" on:click={() => go('/config')}>
-				<span>⚙️ Configuración</span><span>›</span>
-			</button>
-		</div>
-	</div>
-
-	<div class="grid-2">
-		<div class="card">
-			<h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Sistema</h3>
-			<p style="color: var(--color-text-muted); margin: 0; font-size: 0.85rem;">Modo: Administrativo</p>
-		</div>
-		<div class="card">
-			<h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Autenticación</h3>
-			<p style="color: var(--color-text-muted); margin: 0; font-size: 0.85rem;">JWT simple · sin passkeys</p>
-		</div>
+	<div class="menu-grid">
+		{#each modules as mod}
+			{#if visible(mod)}
+				<button
+					class="module-card"
+					class:pronto={!mod.listo}
+					on:click={() => go(mod)}
+					disabled={!mod.listo}
+				>
+					<span class="module-icon">{mod.icon}</span>
+					<span class="module-title">{mod.title}</span>
+					<span class="module-desc">{mod.desc}</span>
+					{#if !mod.listo}
+						<span class="module-badge">PRONTO</span>
+					{/if}
+				</button>
+			{/if}
+		{/each}
 	</div>
 </div>
+
+<style>
+	.brand-col { display: flex; flex-direction: column; gap: 0; }
+	.brand { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 1.2rem; }
+	.brand-logo { width: 34px; height: 34px; object-fit: cover; border-radius: 8px; }
+	.menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+	.module-card {
+		position: relative;
+		display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem;
+		min-height: 176px; height: 100%; padding: 1.25rem 0.75rem;
+		background: var(--color-surface);
+		border: 1px solid rgba(255,255,255,0.05); border-radius: 16px;
+		cursor: pointer; transition: all 0.15s; text-align: center;
+		color: var(--color-text); font-family: inherit;
+	}
+	.module-card:active { transform: scale(0.97); background: var(--color-surface-2); }
+	.module-card.pronto { opacity: 0.75; cursor: default; }
+	.module-card.pronto:active { transform: none; }
+	.module-icon { font-size: 2.5rem; line-height: 1; height: 2.5rem; display: flex; align-items: center; }
+	.module-title { font-weight: 700; font-size: 0.95rem; line-height: 1.25; min-height: 2.4em; display: flex; align-items: center; }
+	.module-desc { font-size: 0.75rem; color: var(--color-text-muted); line-height: 1.3; min-height: 2.6em; }
+	.module-badge {
+		position: absolute; top: 10px; right: 10px;
+		background: var(--color-warning); color: #000;
+		border-radius: 999px; font-size: 0.65rem; font-weight: 700;
+		padding: 0.15rem 0.5rem;
+	}
+</style>

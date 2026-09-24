@@ -61,7 +61,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         parts = token.split("|")
         if len(parts) >= 2:
             email = parts[0]
-            cursor.execute("SELECT IdUsuario, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE Email = %s", (email,))
+            cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
             row = cursor.fetchone()
             conn.close()
             if row:
@@ -116,11 +116,11 @@ async def login(user: UserLogin):
         if not valid:
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         
-        cursor.execute("SELECT IdUsuario, Nombre, Email, Contrasenia FROM HUB_Users WHERE Email = %s", (user.email,))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (user.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
-        
-        if row and row[3] == user.password:  # Simple password check
+
+        if row and row[4] and row[3] == user.password:  # Password plano + Activo, igual que el HUB
             # Create JWT token (email|issued_at)
             import time
             timestamp = int(time.time())
@@ -147,10 +147,16 @@ def _build_login_response(email: str, row) -> dict:
     timestamp = int(time.time())
     token = f"{email}|{timestamp}"
     expires_at = (timestamp + 7 * 24 * 3600) * 1000  # 7 días en ms
-    # row: IdUsuario, Nombre, Email, Contrasenia, AccesoUsuarios
+    # row: Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas,
+    #      AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo,
+    #      AccesoTelegram, AccesoUsuarios
+    b = lambda i: (row[i] == 1) if len(row) > i and row[i] is not None else False
     user = {
         "id": row[0], "nombre": row[1], "email": row[2],
-        "acceso_usuarios": (row[4] == 1) if len(row) > 4 and row[4] is not None else False,
+        "acceso_inventario": b(5), "acceso_nominas": b(6),
+        "acceso_cotizaciones": b(7), "acceso_proveedores": b(8),
+        "acceso_oc": b(9), "acceso_calculo": b(10),
+        "acceso_telegram": b(11), "acceso_usuarios": b(12),
     }
     return {"token": token, "user": user, "expiresAt": expires_at}
 
@@ -164,10 +170,10 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT IdUsuario, Nombre, Email, Contrasenia, AccesoUsuarios FROM HUB_Users WHERE Email = %s", (body.email,))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
-        if row and row[3] == body.password:
+        if row and row[4] and row[3] == body.password:
             return _build_login_response(body.email, row)
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
     except HTTPException:
@@ -189,7 +195,7 @@ async def get_users(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT IdUsuario, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users")
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users")
         rows = cursor.fetchall()
         conn.close()
         result = []
