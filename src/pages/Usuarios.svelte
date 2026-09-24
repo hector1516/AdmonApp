@@ -27,7 +27,7 @@
 			return;
 		}
 		try {
-			const res = await fetch('/users', { headers: auth.authHeader() });
+			const res = await fetch('/api/users', { headers: auth.authHeader() });
 			if (res.ok) {
 				usuarios = await res.json();
 			} else if (res.status === 401 || res.status === 403) {

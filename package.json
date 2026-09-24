@@ -9,6 +9,7 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
+    "dexie": "^4.4.6",
     "svelte": "^5.0.0"
   },
   "devDependencies": {

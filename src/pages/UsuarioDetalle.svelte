@@ -104,7 +104,7 @@
 			return;
 		}
 		try {
-			const res = await fetch(`/users/${id}`, { headers: auth.authHeader() });
+			const res = await fetch(`/api/users/${id}`, { headers: auth.authHeader() });
 			if (res.ok) {
 				const d = await res.json();
 				nombre = d.nombre || '';
@@ -144,7 +144,7 @@
 		}
 		busy = true;
 		try {
-			const res = await fetch(`/users/${id}`, {
+			const res = await fetch(`/api/users/${id}`, {
 				method: 'PUT',
 				headers: apiHeaders(),
 				body: JSON.stringify({
@@ -174,7 +174,7 @@
 		error = '';
 		busy = true;
 		try {
-			const res = await fetch(`/users/${id}`, { method: 'DELETE', headers: auth.authHeader() });
+			const res = await fetch(`/api/users/${id}`, { method: 'DELETE', headers: auth.authHeader() });
 			const data = await res.json().catch(() => ({}));
 			if (!res.ok) throw new Error(data.detail || 'Error al eliminar.');
 			navigate('/usuarios', { replace: true });

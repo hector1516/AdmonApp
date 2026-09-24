@@ -1,20 +1,15 @@
 <script>
 	// Banner superior clonado de Field: estado de sincronía + usuario logueado.
 	// Diferencias vs Field: SIN vehículo asignado (Admon no opera vehículos).
+	import { get } from 'svelte/store';
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { auth } from '$lib/stores/auth.js';
-
-	let syncing = $state(false);
-	// Fase 1: sin cola offline -> 0 pendientes = "Todo sincronizado"
-	let pendingCount = $state(0);
+	import { pendingCount, syncing, syncPush } from '$lib/sync.js';
 
 	async function forceSync() {
-		if (!$online || syncing) return;
-		syncing = true;
-		try {
-			await onlinePing();
-		} catch {}
-		syncing = false;
+		if (!get(online) || get(syncing)) return;
+		await onlinePing();
+		await syncPush();
 	}
 </script>
 

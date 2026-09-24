@@ -13,11 +13,9 @@ const APP_SHELL = [
 	'/icons/icon-512x512.png'
 ];
 
-// Prefijos que son API (network-only, jamás cachear: llevan auth y POSTs)
-const API_PREFIXES = [
-	'/api', '/token', '/users', '/cotizaciones', '/inventory',
-	'/dashboard', '/pdf', '/health', '/openapi.json', '/docs', '/redoc'
-];
+// Prefijos que son API (network-only, jamás cachear: llevan auth y POSTs).
+// La API vive bajo /api/*; la SPA es dueña de la raíz (sin colisiones).
+const API_PREFIXES = ['/api', '/docs', '/openapi.json', '/redoc'];
 
 self.addEventListener('install', (e) => {
 	e.waitUntil(
@@ -56,13 +54,17 @@ self.addEventListener('fetch', (e) => {
 		return;
 	}
 
-	// Navegaciones (rutas SPA) -> red primero, fallback al shell cacheado
+	// Navegaciones (rutas SPA) -> red primero, fallback al shell cacheado.
+	// Solo se cachea el shell si la red respondió OK (un 403/404 no debe
+	// quedar guardado como index.html para el modo offline).
 	if (request.mode === 'navigate') {
 		e.respondWith(
 			fetch(request)
 				.then((res) => {
-					const copy = res.clone();
-					caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {});
+					if (res && res.ok) {
+						const copy = res.clone();
+						caches.open(CACHE).then((c) => c.put('/index.html', copy)).catch(() => {});
+					}
 					return res;
 				})
 				.catch(() => caches.match('/index.html').then((r) => r || caches.match('/')))

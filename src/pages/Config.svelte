@@ -90,7 +90,7 @@
 		}
 		if (isAdmin) {
 			try {
-				const res = await fetch('/users', { headers: auth.authHeader() });
+				const res = await fetch('/api/users', { headers: auth.authHeader() });
 				if (res.ok) avUsers = await res.json();
 			} catch {}
 		}

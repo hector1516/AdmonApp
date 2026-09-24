@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 app = FastAPI(title="HUB Admon API", version="1.0.0")
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/token")
 
 DB_SERVER = os.getenv("HUB_DB_SERVER", "172.26.117.220")
 DB_USER = os.getenv("HUB_DB_USER", "sa")
@@ -104,7 +104,7 @@ async def api_health():
 
 # --- Auth Endpoints ---
 
-@app.post("/token")
+@app.post("/api/token")
 async def login(user: UserLogin):
     """Login with email and password, returns JWT token"""
     try:
@@ -313,12 +313,12 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
 
 # --- User Endpoints ---
 
-@app.get("/users/me", response_model=UserInfo)
+@app.get("/api/users/me", response_model=UserInfo)
 async def get_me(current_user: dict = Depends(get_current_user)):
     return UserInfo(**current_user)
 
 
-@app.get("/users", response_model=List[UserInfo])
+@app.get("/api/users", response_model=List[UserInfo])
 async def get_users(current_user: dict = Depends(get_current_user)):
     """Get all users - admin only"""
     try:
@@ -390,7 +390,7 @@ def _user_row_to_dict(row) -> dict:
     return d
 
 
-@app.get("/users/{user_id}")
+@app.get("/api/users/{user_id:int}")
 async def get_user_detail(user_id: int, current_user: dict = Depends(get_current_user)):
     _require_admin(current_user)
     try:
@@ -418,7 +418,7 @@ class UserUpdateRequest(BaseModel):
     accesos: Dict[str, bool] = {}
 
 
-@app.put("/users/{user_id}")
+@app.put("/api/users/{user_id:int}")
 async def update_user_detail(user_id: int, body: UserUpdateRequest, current_user: dict = Depends(get_current_user)):
     _require_admin(current_user)
     if not body.nombre.strip() or not body.email.strip() or not body.password.strip():
@@ -455,7 +455,7 @@ async def update_user_detail(user_id: int, body: UserUpdateRequest, current_user
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.delete("/users/{user_id}")
+@app.delete("/api/users/{user_id:int}")
 async def delete_user_detail(user_id: int, current_user: dict = Depends(get_current_user)):
     _require_admin(current_user)
     try:
@@ -484,7 +484,7 @@ async def delete_user_detail(user_id: int, current_user: dict = Depends(get_curr
 
 # --- Inventory endpoints ---
 
-@app.get("/inventory/items")
+@app.get("/api/inventory/items")
 async def get_inventory_items(current_user: dict = Depends(get_current_user)):
     if not current_user["acceso_inventario"]:
         raise HTTPException(status_code=403, detail="No access")
@@ -506,7 +506,7 @@ async def get_inventory_items(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.get("/inventory/items/{item_id}")
+@app.get("/api/inventory/items/{item_id:int}")
 async def get_inventory_item(item_id: int, current_user: dict = Depends(get_current_user)):
     if not current_user["acceso_inventario"]:
         raise HTTPException(status_code=403, detail="No access")
@@ -529,174 +529,682 @@ async def get_inventory_item(item_id: int, current_user: dict = Depends(get_curr
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-# --- Cotizaciones materiales endpoints ---
+# --- Cotizaciones de materiales (réplica exacta del módulo HUB) ---
+# Tablas: IndiceMateriales (Folio IDENTITY, IdCliente, Contacto, Fecha,
+# Descripcion, Autor, Color, Nota) + Partidas (Folio, Partida, Cantidad,
+# Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias,
+# Dolar, Flete). Vista: vw_ResumenCotizaciones. Folio display: CM00001.
+# Fórmulas HUB: venta_unit = compra*(1+factor); total_item = venta_unit*cant+flete;
+# subtotal = Σ; iva = subtotal*0.16; total = subtotal+iva.
+# Color: 0 = enviada, 1 = lista para facturar, 2 = facturada (1 y 2 bloquean edición).
 
-class Partida(BaseModel):
-    id: Optional[int] = None
-    tipo: str = "MATERIAL"
-    cantidad: float = 1.0
-    descripcion: str = ""
-    modelo: str = ""
-    proveedor: str = ""
-    precio_unitario: float = 0.0
-    precio_venta_total: float = 0.0
+def _require_cotiz(current_user: dict):
+    if not current_user.get("acceso_cotizaciones"):
+        raise HTTPException(status_code=403, detail="No access")
 
 
-class CotizacionMateriales(BaseModel):
-    id: Optional[int] = None
-    folio: str = ""
+def _fmt_folio(folio) -> str:
+    try:
+        return f"CM{int(folio):05d}"
+    except Exception:
+        return str(folio)
+
+
+def _fnum(v) -> float:
+    try:
+        return float(v) if v is not None else 0.0
+    except Exception:
+        return 0.0
+
+
+def _fstr(v) -> str:
+    try:
+        return str(v)[:10] if v is not None else ""
+    except Exception:
+        return ""
+
+
+def _partida_row_to_dict(folio, row) -> dict:
+    # row: Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor,
+    #      Proveedor, TiempoEntregaDias, Dolar, Flete
+    compra = _fnum(row[3])
+    factor = _fnum(row[4])
+    cant = int(row[1] or 0)
+    flete = _fnum(row[8])
+    venta_unit = compra * (1.0 + factor)
+    return {
+        "folio": folio, "partida": row[0], "cantidad": cant,
+        "descripcion": row[2] or "", "precio_compra": compra, "factor": factor,
+        "proveedor": row[5] or "", "tiempo_entrega": int(row[6] or 0),
+        "dolar": _fnum(row[7]), "flete": flete,
+        "venta_unit": venta_unit, "total_venta": venta_unit * cant + flete,
+    }
+
+
+# ----- Helpers de escritura (sin commit; el llamador hace commit) -----
+
+def _db_get_color(cur, folio) -> Optional[int]:
+    cur.execute("SELECT Color FROM IndiceMateriales WHERE Folio = %s", (int(folio),))
+    r = cur.fetchone()
+    return None if not r else (int(r[0]) if r[0] is not None else 0)
+
+
+def _db_create_quotation(cur, id_cliente, contacto, descripcion, autor) -> int:
+    cur.execute(
+        "INSERT INTO IndiceMateriales (IdCliente, Contacto, Fecha, Descripcion, Autor, Color) "
+        "VALUES (%s, %s, GETDATE(), %s, %s, 0)",
+        (id_cliente.strip().upper(), contacto.strip(), descripcion.strip(), autor),
+    )
+    cur.execute("SELECT @@IDENTITY")
+    r = cur.fetchone()
+    if not r or not r[0]:
+        raise Exception("No se obtuvo el folio generado.")
+    return int(r[0])
+
+
+def _db_add_partida(cur, folio, cantidad, descripcion, precio_compra, factor, proveedor, tiempo_entrega, dolar, flete) -> int:
+    cur.execute("SELECT ISNULL(MAX(Partida), 0) + 1 FROM Partidas WHERE Folio = %s", (int(folio),))
+    r = cur.fetchone()
+    nxt = int(r[0]) if r and r[0] else 1
+    cur.execute(
+        "INSERT INTO Partidas (Folio, Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (int(folio), nxt, int(cantidad), descripcion.strip(), float(precio_compra), float(factor),
+         (proveedor or "").strip(), int(tiempo_entrega or 0), float(dolar or 0.0), float(flete or 0.0)),
+    )
+    return nxt
+
+
+def _db_clone_quotation(cur, folio, autor) -> int:
+    cur.execute("SELECT IdCliente, Contacto, Descripcion, Color, Nota FROM IndiceMateriales WHERE Folio = %s", (int(folio),))
+    orig = cur.fetchone()
+    if not orig:
+        raise Exception("Cotización original no encontrada.")
+    cur.execute(
+        "INSERT INTO IndiceMateriales (IdCliente, Contacto, Fecha, Descripcion, Autor, Color, Nota) "
+        "VALUES (%s, %s, GETDATE(), %s, %s, %s, %s)",
+        (orig[0], orig[1], orig[2], autor, orig[3], orig[4]),
+    )
+    cur.execute("SELECT @@IDENTITY")
+    r = cur.fetchone()
+    if not r or not r[0]:
+        raise Exception("No se obtuvo el folio clonado.")
+    nuevo = int(r[0])
+    cur.execute(
+        "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete "
+        "FROM Partidas WHERE Folio = %s ORDER BY Partida ASC", (int(folio),))
+    for p in cur.fetchall():
+        cur.execute(
+            "INSERT INTO Partidas (Folio, Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (nuevo, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]),
+        )
+    return nuevo
+
+
+def _validate_partida_input(cantidad, descripcion):
+    if int(cantidad or 0) < 1:
+        raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a 0.")
+    if not (descripcion or "").strip():
+        raise HTTPException(status_code=400, detail="La descripción es obligatoria.")
+
+
+# ----- Modelos -----
+
+class CotizacionCreate(BaseModel):
     id_cliente: str = ""
     contacto: str = ""
     descripcion: str = ""
-    departamento: str = ""
-    elabora: str = ""
-    tasa_dolar: float = 20.0
-    subtotal_servicios: float = 0.0
-    subtotal_materiales: float = 0.0
-    subtotal: float = 0.0
-    iva: float = 0.0
-    total: float = 0.0
-    estatus: str = "PENDIENTE"
-    notas: str = ""
-    partidas: List[Partida] = []
 
 
-class ItemCreate(BaseModel):
-    tipo: str = "MATERIAL"
-    cantidad: float = 1.0
+class CotizacionUpdate(BaseModel):
+    id_cliente: str = ""
+    contacto: str = ""
     descripcion: str = ""
-    modelo: str = ""
+    color: int = 0
+
+
+class CotizacionNota(BaseModel):
+    nota: str = ""
+
+
+class PartidaCreate(BaseModel):
+    cantidad: int = 1
+    descripcion: str = ""
+    precio_compra: float = 0.0
+    factor: float = 0.25
     proveedor: str = ""
-    precio_unitario: float = 0.0
+    tiempo_entrega: int = 1
+    dolar: float = 0.0
+    flete: float = 0.0
 
 
-@app.post("/cotizaciones/materiales")
-async def crear_cotizacion_materiales(cot: CotizacionMateriales, current_user: dict = Depends(get_current_user)):
-    if not current_user["acceso_cotizaciones"]:
-        raise HTTPException(status_code=403, detail="No access")
+class PartidaUpdate(PartidaCreate):
+    pass
+
+
+class ClienteCreate(BaseModel):
+    id_cliente: str = ""
+    nombre: str = ""
+    dias_pago: int = 30
+
+
+class ClienteUpdate(BaseModel):
+    nombre: str = ""
+    dias_pago: int = 30
+
+
+# ----- Índice / encabezado -----
+
+@app.get("/api/cotizaciones/resumen")
+async def cotizaciones_resumen(current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        
-        # Calculate totals
-        subtotal_materiales = 0.0
-        for item in cot.partidas:
-            subtotal_materiales += item.precio_unitario * item.cantidad
-        
-        iva = subtotal_materiales * 0.16
-        total = subtotal_materiales + iva
-        
-        folio = f"CM-{datetime.now().strftime('%Y')}-{datetime.now().strftime('%m')}-{datetime.now().strftime('%d')}"
-        
-        cursor.execute("""
-            INSERT INTO IndiceMateriales (Folio, IdCliente, Contacto, Descripcion, Departamento, Elabora, 
-                TasaDolar, SubtotalServicios, SubtotalMateriales, Subtotal, IVA, Total, Estatus, Notas, FechaCreacion)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, GETDATE())
-        """, (folio, cot.id_cliente, cot.contacto, cot.descripcion, cot.departamento, 
-              cot.elabora, cot.tasa_dolar, cot.subtotal_servicios, subtotal_materiales, 
-              subtotal_materiales, iva, total, cot.estatus, cot.notas))
-        
-        cursor.execute("SELECT SCOPE_IDENTITY()")
-        id_row = cursor.fetchone()
-        nueva_id = id_row[0] if id_row else None
-        
-        # Insert partidas
-        for item in cot.partidas:
-            cursor.execute("""
-                INSERT INTO Partidas (IdIndice, Tipo, Cantidad, Descripcion, Modelo, Proveedor, PrecioUnitario, PrecioVentaTotal)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (nueva_id, item.tipo, item.cantidad, item.descripcion, item.modelo, 
-                  item.proveedor, item.precio_unitario, item.precio_venta_total))
-        
-        conn.close()
-        
-        return {"folio": folio, "id": nueva_id, "message": "Cotización de materiales creada exitosamente"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating cotización: {str(e)}")
-
-
-@app.get("/cotizaciones/materiales")
-async def listar_cotizaciones_materiales(current_user: dict = Depends(get_current_user)):
-    if not current_user["acceso_cotizaciones"]:
-        raise HTTPException(status_code=403, detail="No access")
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT Id, Folio, IdCliente, Contacto, Descripcion, Departamento, Elabora, 
-                   TasaDolar, SubtotalMateriales, Subtotal, IVA, Total, Estatus, Notas, FechaCreacion
-            FROM IndiceMateriales ORDER BY FechaCreacion DESC
-        """)
+        cursor.execute(
+            "SELECT TOP 999 Folio, IdCliente, Cliente, Contacto, Fecha, DescripcionGeneral, "
+            "Autor, Estatus, SumaPartidas, FleteCotizacion, Subtotal, IVA, TotalFinal "
+            "FROM vw_ResumenCotizaciones ORDER BY Folio DESC"
+        )
         rows = cursor.fetchall()
         conn.close()
-        result = []
-        for row in rows:
-            result.append({
-                "id": row[0], "folio": row[1], "id_cliente": row[2], "contacto": row[3],
-                "descripcion": row[4], "departamento": row[5], "elabora": row[6],
-                "tasa_dolar": row[7], "subtotal_materiales": float(row[8]) if row[8] else 0.0,
-                "subtotal": float(row[9]) if row[9] else 0.0,
-                "iva": float(row[10]) if row[10] else 0.0,
-                "total": float(row[11]) if row[11] else 0.0,
-                "estatus": row[12], "notas": row[13], "fecha_creacion": str(row[14]) if row[14] else ""
-            })
-        return result
+        return [{
+            "folio": r[0], "folio_fmt": _fmt_folio(r[0]),
+            "id_cliente": r[1] or "", "cliente": r[2] or "", "contacto": r[3] or "",
+            "fecha": _fstr(r[4]), "descripcion": r[5] or "", "autor": r[6] or "",
+            "estatus": r[7] or "", "suma_partidas": _fnum(r[8]), "flete": _fnum(r[9]),
+            "subtotal": _fnum(r[10]), "iva": _fnum(r[11]), "total": _fnum(r[12]),
+        } for r in rows]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.get("/cotizaciones/materiales/{cot_id}")
-async def obtener_cotizacion_materiales(cot_id: int, current_user: dict = Depends(get_current_user)):
-    if not current_user["acceso_cotizaciones"]:
-        raise HTTPException(status_code=403, detail="No access")
+@app.get("/api/cotizaciones/{folio:int}")
+async def cotizacion_header(folio: int, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT Id, Folio, IdCliente, Contacto, Descripcion, Departamento, Elabora, 
-                   TasaDolar, SubtotalMateriales, Subtotal, IVA, Total, Estatus, Notas, FechaCreacion
-            FROM IndiceMateriales WHERE Id = %s
-        """, (cot_id,))
-        row = cursor.fetchone()
+        cursor.execute(
+            "SELECT IM.Folio, IM.IdCliente, IM.Contacto, IM.Fecha, IM.Descripcion, IM.Nota, "
+            "IM.Autor, IM.Color, C.Cliente AS ClienteNombre "
+            "FROM IndiceMateriales IM LEFT JOIN clientes C ON IM.IdCliente = C.IdCliente "
+            "WHERE IM.Folio = %s", (int(folio),))
+        r = cursor.fetchone()
         conn.close()
-        if row:
-            return {
-                "id": row[0], "folio": row[1], "id_cliente": row[2], "contacto": row[3],
-                "descripcion": row[4], "departamento": row[5], "elabora": row[6],
-                "tasa_dolar": row[7], "subtotal_materiales": float(row[8]) if row[8] else 0.0,
-                "subtotal": float(row[9]) if row[9] else 0.0,
-                "iva": float(row[10]) if row[10] else 0.0,
-                "total": float(row[11]) if row[11] else 0.0,
-                "estatus": row[12], "notas": row[13], "fecha_creacion": str(row[14]) if row[14] else ""
-            }
-        raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        if not r:
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        return {
+            "folio": r[0], "folio_fmt": _fmt_folio(r[0]),
+            "id_cliente": r[1] or "", "contacto": r[2] or "", "fecha": _fstr(r[3]),
+            "descripcion": r[4] or "", "nota": r[5] or "", "autor": r[6] or "",
+            "color": int(r[7] or 0), "cliente_nombre": r[8] or "",
+        }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.get("/cotizaciones/materiales/{cot_id}/partidas")
-async def obtener_partidas_cotizacion(cot_id: int, current_user: dict = Depends(get_current_user)):
-    if not current_user["acceso_cotizaciones"]:
-        raise HTTPException(status_code=403, detail="No access")
+@app.post("/api/cotizaciones")
+async def cotizacion_create(body: CotizacionCreate, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    idc = (body.id_cliente or "").strip().upper()
+    if not idc or not (body.contacto or "").strip() or not (body.descripcion or "").strip():
+        raise HTTPException(status_code=400, detail="Cliente, contacto y descripción son obligatorios.")
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT Id, Tipo, Cantidad, Descripcion, Modelo, Proveedor, PrecioUnitario, PrecioVentaTotal
-            FROM Partidas WHERE IdIndice = %s
-        """, (cot_id,))
+        cursor.execute("SELECT Cliente FROM clientes WHERE IdCliente = %s", (idc,))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail=f"El ID de cliente {idc} no existe.")
+        folio = _db_create_quotation(cursor, idc, body.contacto, body.descripcion, current_user.get("nombre") or current_user.get("email"))
+        conn.commit()
+        conn.close()
+        return {"folio": folio, "folio_fmt": _fmt_folio(folio)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/cotizaciones/{folio:int}")
+async def cotizacion_update(folio: int, body: CotizacionUpdate, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    idc = (body.id_cliente or "").strip().upper()
+    if not idc or not (body.contacto or "").strip() or not (body.descripcion or "").strip():
+        raise HTTPException(status_code=400, detail="Cliente, contacto y descripción son obligatorios.")
+    if int(body.color) not in (0, 1, 2):
+        raise HTTPException(status_code=400, detail="Estatus inválido.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT IdCliente, Contacto, Descripcion, Color FROM IndiceMateriales WHERE Folio = %s", (int(folio),))
+        cur_row = cursor.fetchone()
+        if not cur_row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        cur_color = int(cur_row[3] or 0)
+        if cur_color in (1, 2):
+            # Bloqueada: solo se permite transición de estatus, no editar datos
+            if ((cur_row[0] or "") != idc or (cur_row[1] or "") != body.contacto.strip()
+                    or (cur_row[2] or "") != body.descripcion.strip()):
+                conn.close()
+                raise HTTPException(status_code=400, detail="Cotización bloqueada (lista para facturar/facturada).")
+        cursor.execute(
+            "UPDATE IndiceMateriales SET IdCliente = %s, Contacto = %s, Descripcion = %s, Color = %s WHERE Folio = %s",
+            (idc, body.contacto.strip(), body.descripcion.strip(), int(body.color), int(folio)),
+        )
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/cotizaciones/{folio:int}/nota")
+async def cotizacion_nota(folio: int, body: CotizacionNota, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE IndiceMateriales SET Nota = %s WHERE Folio = %s", ((body.nota or "").strip(), int(folio)))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/cotizaciones/{folio:int}")
+async def cotizacion_delete(folio: int, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        color = _db_get_color(cursor, folio)
+        if color is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        if color in (1, 2):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Cotización bloqueada (lista para facturar/facturada).")
+        cursor.execute("DELETE FROM Partidas WHERE Folio = %s", (int(folio),))
+        cursor.execute("DELETE FROM IndiceMateriales WHERE Folio = %s", (int(folio),))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/cotizaciones/{folio:int}/clonar")
+async def cotizacion_clonar(folio: int, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        nuevo = _db_clone_quotation(cursor, folio, current_user.get("nombre") or current_user.get("email"))
+        conn.commit()
+        conn.close()
+        return {"folio": nuevo, "folio_fmt": _fmt_folio(nuevo)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ----- Partidas -----
+
+@app.get("/api/cotizaciones/{folio:int}/partidas")
+async def cotizacion_partidas(folio: int, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, "
+            "Proveedor, TiempoEntregaDias, Dolar, Flete "
+            "FROM Partidas WHERE Folio = %s ORDER BY Partida ASC", (int(folio),))
         rows = cursor.fetchall()
         conn.close()
-        result = []
-        for row in rows:
-            result.append({
-                "id": row[0], "tipo": row[1], "cantidad": row[2], "descripcion": row[3],
-                "modelo": row[4], "proveedor": row[5], "precio_unitario": float(row[6]) if row[6] else 0.0,
-                "precio_venta_total": float(row[7]) if row[7] else 0.0
-            })
-        return result
+        return [_partida_row_to_dict(int(folio), r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/cotizaciones/{folio:int}/partidas")
+async def cotizacion_partida_add(folio: int, body: PartidaCreate, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    _validate_partida_input(body.cantidad, body.descripcion)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        color = _db_get_color(cursor, folio)
+        if color is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        if color in (1, 2):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Cotización bloqueada.")
+        num = _db_add_partida(cursor, folio, body.cantidad, body.descripcion, body.precio_compra,
+                              body.factor, body.proveedor, body.tiempo_entrega, body.dolar, body.flete)
+        conn.commit()
+        conn.close()
+        return {"ok": True, "partida": num}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/cotizaciones/{folio:int}/partidas/{partida:int}")
+async def cotizacion_partida_update(folio: int, partida: int, body: PartidaUpdate, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    _validate_partida_input(body.cantidad, body.descripcion)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        color = _db_get_color(cursor, folio)
+        if color is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        if color in (1, 2):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Cotización bloqueada.")
+        cursor.execute(
+            "UPDATE Partidas SET Cantidad = %s, Descripcion = %s, PrecioCompraUnitario = %s, "
+            "Factor = %s, Proveedor = %s, TiempoEntregaDias = %s, Dolar = %s, Flete = %s "
+            "WHERE Folio = %s AND Partida = %s",
+            (int(body.cantidad), body.descripcion.strip(), float(body.precio_compra), float(body.factor),
+             (body.proveedor or "").strip(), int(body.tiempo_entrega or 0), float(body.dolar or 0.0),
+             float(body.flete or 0.0), int(folio), int(partida)),
+        )
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/cotizaciones/{folio:int}/partidas/{partida:int}")
+async def cotizacion_partida_delete(folio: int, partida: int, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        color = _db_get_color(cursor, folio)
+        if color is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        if color in (1, 2):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Cotización bloqueada.")
+        cursor.execute("DELETE FROM Partidas WHERE Folio = %s AND Partida = %s", (int(folio), int(partida)))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ----- Clientes -----
+
+@app.get("/api/clientes")
+async def clientes_list(current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT IdCliente, Cliente, CondicionesPagoDias FROM clientes ORDER BY IdCliente ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id_cliente": r[0], "nombre": r[1], "dias_pago": r[2]} for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/clientes")
+async def cliente_create(body: ClienteCreate, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    idc = (body.id_cliente or "").strip().upper()
+    if not idc or not (body.nombre or "").strip():
+        raise HTTPException(status_code=400, detail="ID y razón social son obligatorios.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Cliente FROM clientes WHERE IdCliente = %s", (idc,))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail=f"El ID {idc} ya está registrado.")
+        cursor.execute(
+            "INSERT INTO clientes (IdCliente, Cliente, CondicionesPagoDias) VALUES (%s, %s, %s)",
+            (idc, body.nombre.strip(), int(body.dias_pago or 0)),
+        )
+        conn.commit()
+        conn.close()
+        return {"ok": True, "id_cliente": idc}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/clientes/{id_cliente}")
+async def cliente_update(id_cliente: str, body: ClienteUpdate, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    if not (body.nombre or "").strip():
+        raise HTTPException(status_code=400, detail="La razón social no puede estar vacía.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE clientes SET Cliente = %s, CondicionesPagoDias = %s WHERE IdCliente = %s",
+            (body.nombre.strip(), int(body.dias_pago or 0), id_cliente.strip().upper()),
+        )
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/clientes/{id_cliente}")
+async def cliente_delete(id_cliente: str, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM clientes WHERE IdCliente = %s", (id_cliente.strip().upper(),))
+        except Exception as e:
+            conn.close()
+            raise HTTPException(status_code=400, detail="No se puede eliminar: tiene cotizaciones asociadas.")
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/clientes/{id_cliente}/nombre")
+async def cliente_nombre(id_cliente: str, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Cliente FROM clientes WHERE IdCliente = %s", (id_cliente.strip().upper(),))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Cliente no existe.")
+        return {"id_cliente": id_cliente.strip().upper(), "nombre": row[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/clientes/{id_cliente}/contactos")
+async def cliente_contactos(id_cliente: str, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT Contacto FROM IndiceMateriales "
+            "WHERE IdCliente = %s AND Contacto IS NOT NULL AND LTRIM(RTRIM(Contacto)) <> '' "
+            "ORDER BY Contacto ASC", (id_cliente.strip().upper(),))
+        rows = cursor.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ----- Sync offline (outbox estilo Field) -----
+# Entidades: cotizacion (create/update/delete/nota), partida (add/update/delete).
+# Los pendientes locales usan id_local (uuid); el servidor asigna folio real y
+# devuelve el mapeo para reescribir partidas del mismo lote.
+
+class SyncItem(BaseModel):
+    entity: str = ""
+    action: str = ""
+    id_local: str = ""
+    payload: Dict[str, Any] = {}
+
+
+class SyncPushRequest(BaseModel):
+    items: List[SyncItem] = []
+
+
+@app.post("/api/sync/push")
+async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    autor = current_user.get("nombre") or current_user.get("email")
+    results = []
+    idmap: Dict[str, int] = {}
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        for it in body.items:
+            r: dict = {"id_local": it.id_local, "status": "error", "message": ""}
+            try:
+                p = it.payload or {}
+
+                def _folio_of(pl: dict) -> Optional[int]:
+                    if pl.get("folio") is not None:
+                        return int(pl["folio"])
+                    lid = pl.get("id_local") or it.id_local
+                    return idmap.get(lid)
+
+                if it.entity == "cotizacion" and it.action == "create":
+                    folio = _db_create_quotation(cursor, p.get("id_cliente", ""), p.get("contacto", ""),
+                                                 p.get("descripcion", ""), autor)
+                    idmap[it.id_local] = folio
+                    r.update({"status": "ok", "folio": folio, "folio_fmt": _fmt_folio(folio)})
+                elif it.entity == "cotizacion" and it.action == "update":
+                    folio = _folio_of(p)
+                    if folio is None:
+                        raise Exception("Sin folio (aún no sincronizada).")
+                    cursor.execute(
+                        "UPDATE IndiceMateriales SET IdCliente = %s, Contacto = %s, Descripcion = %s, Color = %s WHERE Folio = %s",
+                        ((p.get("id_cliente") or "").strip().upper(), (p.get("contacto") or "").strip(),
+                         (p.get("descripcion") or "").strip(), int(p.get("color", 0)), folio),
+                    )
+                    r.update({"status": "ok", "folio": folio})
+                elif it.entity == "cotizacion" and it.action == "delete":
+                    folio = _folio_of(p)
+                    if folio is None:
+                        raise Exception("Sin folio (aún no sincronizada).")
+                    cursor.execute("DELETE FROM Partidas WHERE Folio = %s", (folio,))
+                    cursor.execute("DELETE FROM IndiceMateriales WHERE Folio = %s", (folio,))
+                    r.update({"status": "ok", "folio": folio})
+                elif it.entity == "cotizacion" and it.action == "nota":
+                    folio = _folio_of(p)
+                    if folio is None:
+                        raise Exception("Sin folio (aún no sincronizada).")
+                    cursor.execute("UPDATE IndiceMateriales SET Nota = %s WHERE Folio = %s",
+                                   ((p.get("nota") or "").strip(), folio))
+                    r.update({"status": "ok", "folio": folio})
+                elif it.entity == "partida" and it.action == "add":
+                    folio = _folio_of(p)
+                    if folio is None:
+                        raise Exception("Sin folio (aún no sincronizada).")
+                    num = _db_add_partida(cursor, folio, int(p.get("cantidad", 1)), p.get("descripcion", ""),
+                                          float(p.get("precio_compra", 0.0)), float(p.get("factor", 0.0)),
+                                          p.get("proveedor", ""), int(p.get("tiempo_entrega", 0) or 0),
+                                          float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0))
+                    r.update({"status": "ok", "folio": folio, "partida": num})
+                elif it.entity == "partida" and it.action == "update":
+                    folio = _folio_of(p)
+                    if folio is None:
+                        raise Exception("Sin folio (aún no sincronizada).")
+                    cursor.execute(
+                        "UPDATE Partidas SET Cantidad = %s, Descripcion = %s, PrecioCompraUnitario = %s, "
+                        "Factor = %s, Proveedor = %s, TiempoEntregaDias = %s, Dolar = %s, Flete = %s "
+                        "WHERE Folio = %s AND Partida = %s",
+                        (int(p.get("cantidad", 1)), (p.get("descripcion") or "").strip(),
+                         float(p.get("precio_compra", 0.0)), float(p.get("factor", 0.0)),
+                         (p.get("proveedor") or "").strip(), int(p.get("tiempo_entrega", 0) or 0),
+                         float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0),
+                         folio, int(p.get("partida", 0))),
+                    )
+                    r.update({"status": "ok", "folio": folio})
+                elif it.entity == "partida" and it.action == "delete":
+                    folio = _folio_of(p)
+                    if folio is None:
+                        raise Exception("Sin folio (aún no sincronizada).")
+                    cursor.execute("DELETE FROM Partidas WHERE Folio = %s AND Partida = %s",
+                                   (folio, int(p.get("partida", 0))))
+                    r.update({"status": "ok", "folio": folio})
+                else:
+                    r["message"] = f"Entidad/acción no soportada: {it.entity}/{it.action}"
+            except Exception as e:
+                r["message"] = str(e)[:200]
+            results.append(r)
+        conn.commit()
+        conn.close()
+        return {"results": results}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/sync/pull")
+async def sync_pull(current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT TOP 999 Folio, IdCliente, Cliente, Contacto, Fecha, DescripcionGeneral, "
+            "Autor, Estatus, SumaPartidas, FleteCotizacion, Subtotal, IVA, TotalFinal "
+            "FROM vw_ResumenCotizaciones ORDER BY Folio DESC"
+        )
+        cots = [{
+            "folio": r[0], "id_cliente": r[1] or "", "cliente": r[2] or "", "contacto": r[3] or "",
+            "fecha": _fstr(r[4]), "descripcion": r[5] or "", "autor": r[6] or "",
+            "estatus": r[7] or "", "suma_partidas": _fnum(r[8]), "flete": _fnum(r[9]),
+            "subtotal": _fnum(r[10]), "iva": _fnum(r[11]), "total": _fnum(r[12]),
+        } for r in cursor.fetchall()]
+        cursor.execute("SELECT IdCliente, Cliente, CondicionesPagoDias FROM clientes ORDER BY IdCliente ASC")
+        clis = [{"id_cliente": r[0], "nombre": r[1], "dias_pago": r[2]} for r in cursor.fetchall()]
+        conn.close()
+        return {"cotizaciones": cots, "clientes": clis}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -709,7 +1217,7 @@ class KPIData(BaseModel):
     etiqueta: str
 
 
-@app.get("/dashboard/kpis")
+@app.get("/api/dashboard/kpis")
 async def get_dashboard_kpis(current_user: dict = Depends(get_current_user)):
     """Get KPIs filtered by user permissions"""
     try:
@@ -724,9 +1232,9 @@ async def get_dashboard_kpis(current_user: dict = Depends(get_current_user)):
             row = cursor.fetchone()
             kpis.append({"modulo": "inventario", "valor": row[0] if row else 0, "etiqueta": "Items con stock bajo"})
         
-        # Cotizaciones KPI
+        # Cotizaciones KPI (la vista trae Estatus como texto; IndiceMateriales no tiene esa columna)
         if current_user["acceso_cotizaciones"]:
-            cursor.execute("SELECT COUNT(*) FROM IndiceMateriales WHERE Estatus = 'PENDIENTE'")
+            cursor.execute("SELECT COUNT(*) FROM vw_ResumenCotizaciones WHERE Estatus LIKE '%PENDIENTE%'")
             row = cursor.fetchone()
             kpis.append({"modulo": "cotizaciones", "valor": row[0] if row else 0, "etiqueta": "Cotizaciones pendientes"})
         
@@ -743,7 +1251,7 @@ async def get_dashboard_kpis(current_user: dict = Depends(get_current_user)):
 
 # --- PDF generation endpoint (placeholder) ---
 
-@app.post("/pdf/generate")
+@app.post("/api/pdf/generate")
 async def generate_pdf(current_user: dict = Depends(get_current_user)):
     """Generate PDF for cotización or reporte"""
     if not current_user["acceso_cotizaciones"]:
@@ -773,7 +1281,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones_materiales", "usuarios", "telegram", "config"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}

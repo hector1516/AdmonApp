@@ -4,9 +4,15 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { onlinePing } from '$lib/stores/online.js';
 	import SyncHeader from './components/SyncHeader.svelte';
+	import { syncPull, syncPush } from '$lib/sync.js';
 	import Login from './pages/Login.svelte';
 	import Dashboard from './pages/Dashboard.svelte';
 	import Cotizaciones from './pages/Cotizaciones.svelte';
+	import CotizacionDetalle from './pages/CotizacionDetalle.svelte';
+	import CotizacionNueva from './pages/CotizacionNueva.svelte';
+	import CotizacionEditar from './pages/CotizacionEditar.svelte';
+	import CotizacionNota from './pages/CotizacionNota.svelte';
+	import PartidasAdmin from './pages/PartidasAdmin.svelte';
 	import Usuarios from './pages/Usuarios.svelte';
 	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
 	import Telegram from './pages/Telegram.svelte';
@@ -43,6 +49,9 @@
 		}
 		ready = true;
 		onlinePing().catch(() => {});
+		if (auth.isLoggedIn()) {
+			syncPull().then(() => syncPush()).catch(() => {});
+		}
 	});
 
 </script>
@@ -66,8 +75,18 @@
 			<Login />
 		{:else if $path === '/dashboard' || $path === '/'}
 			<Dashboard />
-		{:else if $path === '/cotizaciones_materiales'}
-			<Cotizaciones />
+			{:else if $path === '/cotizaciones_materiales'}
+				<Cotizaciones />
+			{:else if $path === '/cotizaciones/nueva'}
+				<CotizacionNueva />
+			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/partidas')}
+				<PartidasAdmin clave={$path.split('/')[2]} />
+			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/editar')}
+				<CotizacionEditar clave={$path.split('/')[2]} />
+			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/nota')}
+				<CotizacionNota clave={$path.split('/')[2]} />
+			{:else if $path.startsWith('/cotizaciones/')}
+				<CotizacionDetalle clave={$path.split('/')[2]} />
 			{:else if $path === '/usuarios'}
 				<Usuarios />
 			{:else if $path.startsWith('/usuarios/')}
