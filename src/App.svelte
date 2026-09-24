@@ -8,6 +8,7 @@
 	import Dashboard from './pages/Dashboard.svelte';
 	import Cotizaciones from './pages/Cotizaciones.svelte';
 	import Usuarios from './pages/Usuarios.svelte';
+	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
@@ -67,8 +68,10 @@
 			<Dashboard />
 		{:else if $path === '/cotizaciones_materiales'}
 			<Cotizaciones />
-		{:else if $path === '/usuarios'}
-			<Usuarios />
+			{:else if $path === '/usuarios'}
+				<Usuarios />
+			{:else if $path.startsWith('/usuarios/')}
+				<UsuarioDetalle id={$path.split('/')[2]} />
 		{:else if $path === '/telegram'}
 			<Telegram />
 		{:else if $path === '/config'}

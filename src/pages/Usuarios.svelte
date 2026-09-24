@@ -65,19 +65,20 @@
 	{:else}
 		<div class="list">
 			{#each usuarios as u (u.id)}
-				<div class="list-card" style="cursor: default;">
+				<button class="list-card" on:click={() => navigate(`/usuarios/${u.id}`)}>
 					<div>
 						<div style="font-weight: 600;">{u.nombre}</div>
 						<div style="font-size: 0.8rem; color: var(--color-text-muted);">{u.email}</div>
 					</div>
-					<div>
+					<div style="display:flex;align-items:center;gap:0.5rem;">
 						{#if u.acceso_usuarios}
 							<span class="badge badge-warning">admin</span>
 						{:else}
 							<span class="badge badge-info">usuario</span>
 						{/if}
+						<span style="color: var(--color-text-muted);">›</span>
 					</div>
-				</div>
+				</button>
 			{/each}
 		</div>
 	{/if}

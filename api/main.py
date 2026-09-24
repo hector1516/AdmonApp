@@ -345,6 +345,143 @@ async def get_users(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+# --- Detalle / edición de usuario (espejo del Administrador de Usuarios del HUB) ---
+
+# Columnas de HUB_Users administrables (mismo orden que get_all_hub_users del HUB)
+_USER_COLS = (
+    "Id, Email, Nombre, Password, Activo, FechaIngreso, CurpRfc, "
+    "AccesoCotizaciones, AccesoVM, AccesoConfiguracion, AccesoUsuarios, AccesoReportes, "
+    "AccesoRegistroReportes, AccesoCotizacionesReportes, AccesoClientes, AccesoRegistroKilometros, "
+    "AccesoAutomoviles, AccesoVacaciones, AccesoConfigurarCorreo, AccesoConfigAI, "
+    "Notificaciones, AccesoMisVacaciones, AccesoHorasExtras, AccesoMisHorasExtras, AccesoOxxoGas, "
+    "AccesoValesOxxoGas, AccesoRegistroTicketOxxoGas, AccesoEdicionBD, AccesoNominas, AccesoInventario, "
+    "AccesoCalculo, AccesoProveedores, AccesoOC, AccesoTelegram, AccesoAppConfig, AccesoSolicitarVales, "
+    "AccesoAdminVales, AccesoConfigOxxogas, AccesoDeteccionRed, AccesoPdfConfig"
+)
+# Orden propio (cada columna UNA vez): _user_row_to_dict usa índices fijos
+# id=0, email=1, nombre=2, password=3, activo=4, fecha_ingreso=5, curp_rfc=6,
+# accesos desde 7 en el orden de `keys`.
+
+
+def _require_admin(current_user: dict):
+    if not current_user.get("acceso_usuarios"):
+        raise HTTPException(status_code=403, detail="No access")
+
+
+def _user_row_to_dict(row) -> dict:
+    d = {
+        "id": row[0], "email": row[1], "nombre": row[2], "password": row[3],
+        "activo": bool(row[4]),
+        "fecha_ingreso": str(row[5])[:10] if row[5] else None,
+        "curp_rfc": row[6] or "",
+    }
+    keys = [
+        "AccesoCotizaciones", "AccesoVM", "AccesoConfiguracion", "AccesoUsuarios", "AccesoReportes",
+        "AccesoRegistroReportes", "AccesoCotizacionesReportes", "AccesoClientes", "AccesoRegistroKilometros",
+        "AccesoAutomoviles", "AccesoVacaciones", "AccesoConfigurarCorreo", "AccesoConfigAI",
+        "Notificaciones", "AccesoMisVacaciones", "AccesoHorasExtras", "AccesoMisHorasExtras", "AccesoOxxoGas",
+        "AccesoValesOxxoGas", "AccesoRegistroTicketOxxoGas", "AccesoEdicionBD", "AccesoNominas", "AccesoInventario",
+        "AccesoCalculo", "AccesoProveedores", "AccesoOC", "AccesoTelegram", "AccesoAppConfig",
+        "AccesoSolicitarVales", "AccesoAdminVales", "AccesoConfigOxxogas", "AccesoDeteccionRed", "AccesoPdfConfig",
+    ]
+    for i, k in enumerate(keys):
+        v = row[7 + i]
+        d[k] = (v == 1) if v is not None else False
+    return d
+
+
+@app.get("/users/{user_id}")
+async def get_user_detail(user_id: int, current_user: dict = Depends(get_current_user)):
+    _require_admin(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT {_USER_COLS} FROM HUB_Users WHERE Id = %s", (int(user_id),))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return _user_row_to_dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+class UserUpdateRequest(BaseModel):
+    nombre: str = ""
+    email: str = ""
+    password: str = ""
+    activo: bool = True
+    fecha_ingreso: Optional[str] = None
+    curp_rfc: str = ""
+    accesos: Dict[str, bool] = {}
+
+
+@app.put("/users/{user_id}")
+async def update_user_detail(user_id: int, body: UserUpdateRequest, current_user: dict = Depends(get_current_user)):
+    _require_admin(current_user)
+    if not body.nombre.strip() or not body.email.strip() or not body.password.strip():
+        raise HTTPException(status_code=400, detail="Nombre, correo y contraseña son obligatorios.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        sets = ["Nombre = %s", "Email = %s", "Password = %s", "Activo = %s", "FechaIngreso = %s", "CurpRfc = %s"]
+        vals: list = [
+            body.nombre.strip(), body.email.strip().lower(), body.password,
+            1 if body.activo else 0,
+            body.fecha_ingreso or None,
+            (body.curp_rfc or "").strip() or None,
+        ]
+        allowed = [
+            "AccesoCotizaciones", "AccesoVM", "AccesoConfiguracion", "AccesoUsuarios", "AccesoReportes",
+            "AccesoRegistroReportes", "AccesoCotizacionesReportes", "AccesoClientes", "AccesoRegistroKilometros",
+            "AccesoAutomoviles", "AccesoVacaciones", "AccesoConfigurarCorreo", "AccesoConfigAI",
+            "Notificaciones", "AccesoMisVacaciones", "AccesoHorasExtras", "AccesoMisHorasExtras", "AccesoOxxoGas",
+            "AccesoValesOxxoGas", "AccesoRegistroTicketOxxoGas", "AccesoEdicionBD", "AccesoNominas", "AccesoInventario",
+            "AccesoCalculo", "AccesoProveedores", "AccesoOC", "AccesoTelegram", "AccesoAppConfig",
+            "AccesoSolicitarVales", "AccesoAdminVales", "AccesoConfigOxxogas", "AccesoDeteccionRed", "AccesoPdfConfig",
+        ]
+        for k in allowed:
+            sets.append(f"{k} = %s")
+            vals.append(1 if body.accesos.get(k, False) else 0)
+        vals.append(int(user_id))
+        cursor.execute(f"UPDATE HUB_Users SET {', '.join(sets)} WHERE Id = %s", tuple(vals))
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/users/{user_id}")
+async def delete_user_detail(user_id: int, current_user: dict = Depends(get_current_user)):
+    _require_admin(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Email, Nombre FROM HUB_Users WHERE Id = %s", (int(user_id),))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        if (row[0] or "").strip().lower() == (current_user.get("email") or "").strip().lower():
+            conn.close()
+            raise HTTPException(status_code=400, detail="No puedes eliminar tu propia cuenta.")
+        try:
+            cursor.execute("DELETE FROM HUB_Users WHERE Id = %s", (int(user_id),))
+        except Exception as e:
+            conn.close()
+            raise HTTPException(status_code=400, detail=f"No se pudo eliminar (referencias en otros módulos): {str(e)[:150]}")
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 # --- Inventory endpoints ---
 
 @app.get("/inventory/items")
