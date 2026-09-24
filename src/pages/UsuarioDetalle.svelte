@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import PasswordInput from '../components/PasswordInput.svelte';
 
 	// id viene de la ruta /usuarios/:id (micro-router, modo runes -> $props)
 	let { id } = $props();
@@ -207,7 +208,7 @@
 			</div>
 			<div class="field">
 				<label for="ud-pw">Contraseña:</label>
-				<input id="ud-pw" type="password" class="input" autocomplete="new-password" bind:value={password} />
+				<PasswordInput id="ud-pw" autocomplete="new-password" bind:value={password} />
 			</div>
 			<div class="field">
 				<label for="ud-fecha">Fecha de ingreso:</label>
