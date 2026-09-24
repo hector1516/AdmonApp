@@ -4,9 +4,9 @@
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { auth } from '$lib/stores/auth.js';
 
-	let syncing = false;
+	let syncing = $state(false);
 	// Fase 1: sin cola offline -> 0 pendientes = "Todo sincronizado"
-	let pendingCount = 0;
+	let pendingCount = $state(0);
 
 	async function forceSync() {
 		if (!$online || syncing) return;

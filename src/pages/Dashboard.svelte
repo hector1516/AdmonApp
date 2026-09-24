@@ -14,10 +14,11 @@
 		{ icon: '📋', title: 'Inventario', desc: 'Stock y categorías', path: '', perm: 'acceso_inventario', listo: false },
 		{ icon: '💰', title: 'Nóminas', desc: 'Sueldos semanales', path: '', perm: 'acceso_nominas', listo: false },
 		{ icon: '🏭', title: 'Proveedores', desc: 'Catálogo PROV', path: '', perm: 'acceso_proveedores', listo: false },
-		{ icon: '🧾', title: 'Órdenes de Compra', desc: 'Folio OC', path: '', perm: 'acceso_oc', listo: false }
+		{ icon: '🧾', title: 'Órdenes de Compra', desc: 'Folio OC', path: '', perm: 'acceso_oc', listo: false },
+		{ icon: '⚙️', title: 'Configuración', desc: 'Sistema y PWA', path: '/config', perm: null, listo: true }
 	];
 
-	let user = null;
+	let user = $state(null);
 
 	function visible(mod) {
 		return !mod.perm || (user && user[mod.perm]);

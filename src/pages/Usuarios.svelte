@@ -3,9 +3,9 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 
-	let usuarios = [];
-	let loading = true;
-	let error = '';
+	let usuarios = $state([]);
+	let loading = $state(true);
+	let error = $state('');
 
 	function tieneAcceso() {
 		try {

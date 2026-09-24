@@ -11,10 +11,10 @@
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
-	let ready = false;
-	let splashDone = false;
-	let splashMsg = '';
-	let splashProgress = 0;
+	let ready = $state(false);
+	let splashDone = $state(false);
+	let splashMsg = $state('');
+	let splashProgress = $state(0);
 
 	const splashMessages = [
 		'💻 Inicializando matriz de datos cuánticos...',

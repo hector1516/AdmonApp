@@ -3,9 +3,9 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 
-	let cotizaciones = [];
-	let loading = true;
-	let error = '';
+	let cotizaciones = $state([]);
+	let loading = $state(true);
+	let error = $state('');
 
 	onMount(async () => {
 		if (!auth.isLoggedIn()) {

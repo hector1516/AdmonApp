@@ -2,11 +2,11 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 
-	let email = '';
-	let password = '';
-	let error = '';
-	let loading = false;
-	let privateMode = false;
+	let email = $state('');
+	let password = $state('');
+	let error = $state('');
+	let loading = $state(false);
+	let privateMode = $state(false);
 
 	// Detectar navegación privada: localStorage no persiste ahí
 	try {
