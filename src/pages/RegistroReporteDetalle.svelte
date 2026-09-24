@@ -20,6 +20,10 @@
 	let fotosPreview = $state([]);
 	const maxFotos = 6;
 
+	// PDF blob for download/share (evita abrir en otra ventana)
+	let pdfBlob = $state(null);
+	let pdfLoading = $state(false);
+
 	// Edit mode
 	let editando = $state(false);
 	let editForm = $state({});
@@ -109,9 +113,57 @@
 		return `<span class="badge">${v}</span>`;
 	}
 
+	async function loadPdfBlob() {
+		if (pdfBlob) return true;
+		pdfLoading = true;
+		try {
+			const token = auth.getToken();
+			const res = await fetch(`/api/reportes/${idReporte}/pdf?token=${encodeURIComponent(token)}`, { headers: auth.authHeader() });
+			if (res.ok) {
+				pdfBlob = await res.blob();
+				return true;
+			}
+			const d = await res.json().catch(() => ({}));
+			error = d.detail || 'No se pudo generar el PDF.';
+			return false;
+		} catch {
+			error = 'No se pudo obtener el PDF. Revisa tu conexión.';
+			return false;
+		} finally {
+			pdfLoading = false;
+		}
+	}
+
+	async function descargarPDF() {
+		if (!(await loadPdfBlob())) return;
+		const url = URL.createObjectURL(pdfBlob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `Reporte_${reporte.Folio}.pdf`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	async function compartirPDF() {
+		if (!(await loadPdfBlob())) return;
+		const file = new File([pdfBlob], `Reporte_${reporte.Folio}.pdf`, { type: 'application/pdf' });
+		if (navigator.canShare && navigator.canShare({ files: [file] })) {
+			try {
+				await navigator.share({ files: [file], title: `Reporte ${reporte.Folio}` });
+			} catch {
+				// User canceló o error
+			}
+		} else {
+			// Fallback: descargar
+			await descargarPDF();
+		}
+	}
+
+	// Alias para compatibilidad
 	async function verPDF() {
-		const token = auth.getToken();
-		window.open(`/api/reportes/${idReporte}/pdf?token=${encodeURIComponent(token)}`, '_blank');
+		await loadPdfBlob();
 	}
 
 	async function moverAPapelera() {
@@ -449,7 +501,14 @@
 		<!-- Acciones -->
 		<div class="card">
 			<div class="grid-2">
-				<button class="btn btn-primary btn-block" on:click={verPDF}>🔓 Ver PDF</button>
+				<button class="btn btn-primary btn-block" on:click={descargarPDF} disabled={pdfLoading}>
+					{pdfLoading ? '⏳ Cargando…' : '📥 Descargar PDF'}
+				</button>
+				<button class="btn btn-secondary btn-block" on:click={compartirPDF} disabled={pdfLoading}>
+					📤 Compartir
+				</button>
+			</div>
+			<div class="grid-2" style="margin-top: 0.5rem;">
 				{#if reporte.Eliminado === 1 || reporte.Eliminado === true}
 					<button class="btn btn-success btn-block" on:click={restaurar} disabled={busy}>♻️ Restaurar</button>
 					<button class="btn btn-danger btn-block" on:click={eliminarDefinitivo} disabled={busy}>💀 Eliminar definitivamente</button>
