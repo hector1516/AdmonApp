@@ -78,56 +78,75 @@ def _normalize_image_for_pdf(raw_bytes, max_dim=250, quality=None):
 
 
 # --- Photo grid composite (1 XObject = anti-crash iOS) ---
+# CLON EXACTO de pdf_generator._build_photo_grid_composite
 def _build_photo_grid_composite(fotos, max_photos=6):
-    from PIL import Image as PILImage
-    fotos_validas = fotos[:max_photos]
-    if not fotos_validas:
-        return None
+    from PIL import Image as PILImage, ImageDraw, ImageFont
 
-    cell_w = 250
-    cell_h = 250
-    caption_h = 30
-    cols = 2
-    rows = 3
-    composite_w = cell_w * cols
-    composite_h = (cell_h + caption_h) * rows
+    # Configuración del grid (idéntico al HUB)
+    CELL_W, CELL_H = 250, 250
+    CAPTION_H = 30
+    MARGIN = 20
+    GAP = 10
+    COLS = 2
+    ROWS = 3
 
-    canvas_img = PILImage.new('RGB', (composite_w, composite_h), (255, 255, 255))
+    canvas_w = MARGIN * 2 + COLS * CELL_W + (COLS - 1) * GAP
+    canvas_h = MARGIN * 2 + ROWS * (CELL_H + CAPTION_H) + (ROWS - 1) * GAP
 
-    for idx, f in enumerate(fotos_validas):
-        if idx >= max_photos:
-            break
+    # Canvas blanco
+    canvas = PILImage.new('RGB', (canvas_w, canvas_h), 'white')
+    draw = ImageDraw.Draw(canvas)
+
+    # Fuente para captions
+    try:
+        font = ImageFont.truetype(os.path.join(_FONTS_DIR, 'DejaVuSans.ttf'), 14)
+    except Exception:
+        font = ImageFont.load_default()
+
+    # Procesar máximo 6 fotos
+    for idx, foto in enumerate(fotos[:max_photos]):
         try:
-            b64 = f.get('FotoComprimida') or f.get('base64')
+            # Normalizar imagen (PNG, 250px max)
+            b64 = foto.get('FotoComprimida') or foto.get('base64')
             if not b64:
                 continue
             raw = base64.b64decode(b64)
-            img_buf = io.BytesIO(raw)
-            pil = PILImage.open(img_buf)
-            if pil.mode != 'RGB':
-                pil = pil.convert('RGB')
-            pil.thumbnail((cell_w, cell_h), PILImage.LANCZOS)
+            normalized = _normalize_image_for_pdf(raw, max_dim=CELL_W)
+            pil_img = PILImage.open(normalized)
 
-            row = idx // cols
-            col = idx % cols
-            x = col * cell_w
-            y = row * (cell_h + caption_h)
-            canvas_img.paste(pil, (x, y))
+            # Calcular posición en grid
+            col = idx % COLS
+            row = idx // COLS
+            x = MARGIN + col * (CELL_W + GAP)
+            y = MARGIN + row * (CELL_H + CAPTION_H + GAP)
 
-            # Caption
-            from PIL import ImageDraw, ImageFont
-            draw = ImageDraw.Draw(canvas_img)
-            try:
-                font = ImageFont.truetype(os.path.join(_FONTS_DIR, 'DejaVuSans.ttf'), 14)
-            except Exception:
-                font = ImageFont.load_default()
-            caption = f"#{idx + 1}"
-            draw.text((x + 4, y + cell_h + 4), caption, fill=(0, 0, 0), font=font)
+            # Centrar imagen en celda (mantener aspect ratio)
+            img_x = x + (CELL_W - pil_img.width) // 2
+            img_y = y + (CELL_H - pil_img.height) // 2
+
+            # Pegar imagen
+            canvas.paste(pil_img, (img_x, img_y))
+
+            # Dibujar caption "Foto N" centrado
+            caption = f"Foto {foto['Orden']}"
+            bbox = draw.textbbox((0, 0), caption, font=font)
+            text_w = bbox[2] - bbox[0]
+            text_x = x + (CELL_W - text_w) // 2
+            text_y = y + CELL_H + 5
+            draw.text((text_x, text_y), caption, fill='#475569', font=font)
+
         except Exception:
-            continue
+            # Si falla una foto, dibujar placeholder
+            col = idx % COLS
+            row = idx // COLS
+            x = MARGIN + col * (CELL_W + GAP)
+            y = MARGIN + row * (CELL_H + CAPTION_H + GAP)
+            draw.rectangle([x, y, x + CELL_W, y + CELL_H], outline='#CBD5E1', width=1)
+            draw.text((x + 10, y + CELL_H // 2), f"Foto {foto['Orden']} (error)", fill='#EF4444', font=font)
 
+    # Guardar como JPEG baseline (más pequeño que PNG para canvas grande)
     out = io.BytesIO()
-    canvas_img.save(out, format='PNG', optimize=True)
+    canvas.save(out, format='JPEG', quality=80, progressive=False, optimize=True)
     out.seek(0)
     return out
 
