@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ ./api/
 # Frontend compilado localmente (npm run build) -> servido por FastAPI en "/"
 COPY dist/ ./dist/
+# Logo ECCSA para el encabezado del PDF de cotizaciones (opcional: el builder lo omite si falta)
+COPY eccsa_logo.png ./eccsa_logo.png
 
 EXPOSE 8000
 

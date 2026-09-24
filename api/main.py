@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from api.pdf_cotizacion import build_cotizacion_pdf
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import pymssql
@@ -51,36 +52,52 @@ class UserInfo(BaseModel):
 
 # --- Auth Dependency ---
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    # Simple JWT validation - in production use PyJWT
-    # For now, validate token format and check against DB
+def _user_from_token(token: str):
+    """Valida el token simple (email|timestamp) contra HUB_Users. Retorna dict o None."""
     try:
+        parts = (token or "").split("|")
+        if len(parts) < 2:
+            return None
+        email = parts[0]
         conn = get_connection()
         cursor = conn.cursor()
-        # Decode simple token (email|timestamp format)
-        parts = token.split("|")
-        if len(parts) >= 2:
-            email = parts[0]
-            cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                return {
-                    "id": row[0],
-                    "nombre": row[1],
-                    "email": row[2],
-                    "acceso_inventario": row[3] == 1,
-                    "acceso_nominas": row[4] == 1,
-                    "acceso_cotizaciones": row[5] == 1,
-                    "acceso_proveedores": row[6] == 1,
-                    "acceso_oc": row[7] == 1,
-                    "acceso_calculo": row[8] == 1,
-                    "acceso_telegram": row[9] == 1,
-                    "acceso_usuarios": row[10] == 1,
-                }
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {
+                "id": row[0],
+                "nombre": row[1],
+                "email": row[2],
+                "acceso_inventario": row[3] == 1,
+                "acceso_nominas": row[4] == 1,
+                "acceso_cotizaciones": row[5] == 1,
+                "acceso_proveedores": row[6] == 1,
+                "acceso_oc": row[7] == 1,
+                "acceso_calculo": row[8] == 1,
+                "acceso_telegram": row[9] == 1,
+                "acceso_usuarios": row[10] == 1,
+            }
+        return None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Auth error: {str(e)}")
-    raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    user = _user_from_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
+
+
+def _user_from_header_or_query(request: Request):
+    """Auth para descargas/iframes: Bearer en header o ?token= en query (como Field)."""
+    auth_h = request.headers.get("Authorization", "")
+    token = auth_h[7:] if auth_h.startswith("Bearer ") else request.query_params.get("token", "")
+    user = _user_from_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
 
 
 # --- Root / health (sin auth, para Docker HEALTHCHECK y pruebas) ---
@@ -858,6 +875,122 @@ async def cotizacion_clonar(folio: int, current_user: dict = Depends(get_current
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ----- PDF y envío por correo (como el HUB) -----
+
+def _cotizacion_pdf_bytes(folio: int) -> tuple:
+    """Arma header + partidas y genera el PDF. Retorna (filename, bytes)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT IM.Folio, IM.IdCliente, IM.Contacto, IM.Fecha, IM.Descripcion, IM.Nota, "
+        "IM.Autor, IM.Color, C.Cliente AS ClienteNombre "
+        "FROM IndiceMateriales IM LEFT JOIN clientes C ON IM.IdCliente = C.IdCliente "
+        "WHERE IM.Folio = %s", (int(folio),))
+    r = cursor.fetchone()
+    if not r:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Cotización no encontrada")
+    header = {
+        "folio": r[0], "id_cliente": r[1] or "", "contacto": r[2] or "",
+        "fecha": _fstr(r[3]), "descripcion": r[4] or "", "nota": r[5] or "",
+        "autor": r[6] or "", "color": int(r[7] or 0), "cliente_nombre": r[8] or "",
+    }
+    cursor.execute(
+        "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, "
+        "Proveedor, TiempoEntregaDias, Dolar, Flete "
+        "FROM Partidas WHERE Folio = %s ORDER BY Partida ASC", (int(folio),))
+    parts = [_partida_row_to_dict(int(folio), row) for row in cursor.fetchall()]
+    conn.close()
+    if not parts:
+        raise HTTPException(status_code=400, detail="La cotización no tiene partidas.")
+    return f"Cotizacion_{_fmt_folio(folio)}.pdf", build_cotizacion_pdf(header, parts)
+
+
+@app.get("/api/cotizaciones/{folio:int}/pdf")
+async def cotizacion_pdf(folio: int, request: Request):
+    _user = _user_from_header_or_query(request)
+    _require_cotiz(_user)
+    try:
+        filename, pdf_bytes = _cotizacion_pdf_bytes(folio)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+class CotizacionEnviar(BaseModel):
+    to_email: str = ""
+    subject: str = ""
+    body: str = ""
+
+
+def _smtp_send_with_pdf(to_email: str, subject: str, body: str, pdf_bytes: bytes,
+                        pdf_filename: str, sender_email: str, cc_email=None):
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.application import MIMEApplication
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT TOP 1 SmtpServer, Port, Username, Password, UseSSL, UseTLS, RequireAuth "
+                   "FROM HUB_EmailConfig ORDER BY Id ASC")
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise Exception("Sin configuración SMTP (HUB_EmailConfig).")
+    server_name, port, username, password = row[0].strip(), int(row[1]), row[2].strip(), row[3].strip()
+    use_ssl, use_tls, require_auth = bool(row[4]), bool(row[5]), bool(row[6])
+    msg = MIMEMultipart()
+    msg["From"] = f"{sender_email}"
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    if cc_email:
+        msg["Cc"] = cc_email
+    msg.attach(MIMEText(body or "", "plain", "utf-8"))
+    part = MIMEApplication(pdf_bytes, _subtype="pdf")
+    part.add_header("Content-Disposition", "attachment", filename=pdf_filename)
+    msg.attach(part)
+    recipients = [to_email] + ([cc_email] if cc_email else [])
+    if use_ssl:
+        server = smtplib.SMTP_SSL(server_name, port, timeout=20)
+    else:
+        server = smtplib.SMTP(server_name, port, timeout=20)
+        if use_tls:
+            server.starttls()
+    if require_auth:
+        server.login(username, password)
+    server.sendmail(username, recipients, msg.as_string())
+    server.quit()
+
+
+@app.post("/api/cotizaciones/{folio:int}/enviar")
+async def cotizacion_enviar(folio: int, body: CotizacionEnviar, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    to_email = (body.to_email or "").strip()
+    if not to_email or "@" not in to_email:
+        raise HTTPException(status_code=400, detail="Correo destinatario inválido.")
+    try:
+        filename, pdf_bytes = _cotizacion_pdf_bytes(folio)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    try:
+        _smtp_send_with_pdf(to_email, (body.subject or "").strip() or f"Envío cotización {_fmt_folio(folio)}",
+                            body.body or "", pdf_bytes, filename,
+                            current_user.get("email"), cc_email=current_user.get("email"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo enviar: {str(e)[:200]}")
+    return {"ok": True}
 
 
 # ----- Partidas -----

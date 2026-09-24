@@ -13,6 +13,9 @@
 	import CotizacionEditar from './pages/CotizacionEditar.svelte';
 	import CotizacionNota from './pages/CotizacionNota.svelte';
 	import PartidasAdmin from './pages/PartidasAdmin.svelte';
+	import CotizacionPdf from './pages/CotizacionPdf.svelte';
+	import CotizacionEnviar from './pages/CotizacionEnviar.svelte';
+	import CotizacionEstatus from './pages/CotizacionEstatus.svelte';
 	import Usuarios from './pages/Usuarios.svelte';
 	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
 	import Telegram from './pages/Telegram.svelte';
@@ -85,6 +88,12 @@
 				<CotizacionEditar clave={$path.split('/')[2]} />
 			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/nota')}
 				<CotizacionNota clave={$path.split('/')[2]} />
+			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/pdf')}
+				<CotizacionPdf clave={$path.split('/')[2]} />
+			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/enviar')}
+				<CotizacionEnviar clave={$path.split('/')[2]} />
+			{:else if $path.startsWith('/cotizaciones/') && $path.endsWith('/estatus')}
+				<CotizacionEstatus clave={$path.split('/')[2]} />
 			{:else if $path.startsWith('/cotizaciones/')}
 				<CotizacionDetalle clave={$path.split('/')[2]} />
 			{:else if $path === '/usuarios'}

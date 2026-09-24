@@ -167,6 +167,10 @@
 		{/if}
 
 		<div class="grid-2" style="margin-bottom: 0.5rem;">
+			<button class="btn btn-primary btn-block" on:click={() => navigate(`/cotizaciones/${clave}/pdf`)} disabled={busy}>👁️ Previsualizar PDF</button>
+			<button class="btn btn-secondary btn-block" on:click={() => navigate(`/cotizaciones/${clave}/enviar`)} disabled={busy}>📧 Enviar</button>
+		</div>
+		<div class="grid-2" style="margin-bottom: 0.5rem;">
 			<button class="btn btn-primary btn-block" on:click={() => navigate(`/cotizaciones/${clave}/partidas`)} disabled={bloqueado || busy}>📝 Partidas</button>
 			<button class="btn btn-secondary btn-block" on:click={() => navigate(`/cotizaciones/${clave}/editar`)} disabled={bloqueado || busy}>✏️ Modificar</button>
 		</div>
@@ -174,6 +178,7 @@
 			<button class="btn btn-secondary btn-block" on:click={() => navigate(`/cotizaciones/${clave}/nota`)} disabled={busy}>📝 Nota</button>
 			<button class="btn btn-secondary btn-block" on:click={onClonar} disabled={busy}>🐑 Clonar</button>
 		</div>
+		<button class="btn btn-secondary btn-block" style="margin-bottom: 0.5rem;" on:click={() => navigate(`/cotizaciones/${clave}/estatus`)} disabled={busy}>🚦 Cambiar estatus</button>
 		<button class="btn btn-danger btn-block" on:click={onBorrar} disabled={bloqueado || busy}>🚨 Borrar cotización</button>
 		{#if bloqueado}
 			<p class="hint" style="margin-top: 0.5rem;">🔒 Bloqueada (lista para facturar / facturada).</p>
