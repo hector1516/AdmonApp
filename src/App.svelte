@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte';
-	import { Router, Route, Link, navigate } from 'svelte-routing';
+	import { path, navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { onlinePing } from '$lib/stores/online.js';
 	import SyncHeader from './components/SyncHeader.svelte';
@@ -48,6 +48,10 @@
 		auth.logout();
 		navigate('/login', { replace: true });
 	}
+
+	function navClass(p) {
+		return 'nav-item' + ($path === p ? ' active' : '');
+	}
 </script>
 
 {#if !splashDone}
@@ -65,33 +69,33 @@
 	{/if}
 
 	<div style="padding-top: {$auth.user ? 'calc(3.8rem + env(safe-area-inset-top))' : '0'}">
-		<Router>
-			<Route path="/login" component={Login} />
-			<Route path="/">
-				{#if auth.isLoggedIn()}
-					<Dashboard />
-				{:else}
-					<Login />
-				{/if}
-			</Route>
-			<Route path="/dashboard" component={Dashboard} />
-			<Route path="/cotizaciones_materiales" component={Cotizaciones} />
-			<Route path="/usuarios" component={Usuarios} />
-			<Route path="/telegram" component={Telegram} />
-			<Route path="/config" component={Config} />
-		</Router>
+		{#if $path === '/login'}
+			<Login />
+		{:else if $path === '/dashboard' || $path === '/'}
+			<Dashboard />
+		{:else if $path === '/cotizaciones_materiales'}
+			<Cotizaciones />
+		{:else if $path === '/usuarios'}
+			<Usuarios />
+		{:else if $path === '/telegram'}
+			<Telegram />
+		{:else if $path === '/config'}
+			<Config />
+		{:else}
+			<Dashboard />
+		{/if}
 		<div class="version-badge">Admon v1.0.0</div>
 	</div>
 
 	{#if $auth.user}
 		<nav class="bottom-nav">
-			<Link to="/dashboard" class="nav-item"><span class="nav-icon">📊</span><span>Panel</span></Link>
-			<Link to="/cotizaciones_materiales" class="nav-item"><span class="nav-icon">📦</span><span>Cotiz.</span></Link>
+			<a href="/dashboard" class={navClass('/dashboard')}><span class="nav-icon">📊</span><span>Panel</span></a>
+			<a href="/cotizaciones_materiales" class={navClass('/cotizaciones_materiales')}><span class="nav-icon">📦</span><span>Cotiz.</span></a>
 			{#if $auth.user.acceso_usuarios}
-				<Link to="/usuarios" class="nav-item"><span class="nav-icon">👥</span><span>Usuarios</span></Link>
+				<a href="/usuarios" class={navClass('/usuarios')}><span class="nav-icon">👥</span><span>Usuarios</span></a>
 			{/if}
-			<Link to="/telegram" class="nav-item"><span class="nav-icon">📱</span><span>Telegram</span></Link>
-			<Link to="/config" class="nav-item"><span class="nav-icon">⚙️</span><span>Config</span></Link>
+			<a href="/telegram" class={navClass('/telegram')}><span class="nav-icon">📱</span><span>Telegram</span></a>
+			<a href="/config" class={navClass('/config')}><span class="nav-icon">⚙️</span><span>Config</span></a>
 			<button on:click={logout} class="nav-item" title="Cerrar sesión"><span class="nav-icon">🚪</span><span>Salir</span></button>
 		</nav>
 	{/if}

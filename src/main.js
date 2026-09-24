@@ -1,7 +1,11 @@
 import './styles/app.css';
+import { mount } from 'svelte';
 import App from './App.svelte';
 
-const app = new App({
+// Svelte 5: los componentes compilan a funciones, NO a clases.
+// `new App(...)` lanza effect_orphan y deja la página en blanco;
+// se monta con `mount()` que crea el contexto de efectos.
+const app = mount(App, {
   target: document.getElementById('app')
 });
 

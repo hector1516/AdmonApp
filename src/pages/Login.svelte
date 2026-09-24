@@ -1,5 +1,5 @@
 <script>
-	import { navigate } from 'svelte-routing';
+	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 
 	let email = '';
