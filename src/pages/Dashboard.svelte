@@ -3,7 +3,7 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 
-	// Menú de módulos estilo Field: icon/title/desc/path/perm.
+	// Menú de módulos estilo home de Field: icon/title/desc/path/perm.
 	// listo=true navega; listo=false muestra badge PRONTO (aún no funciona).
 	const modules = [
 		{ icon: '📦', title: 'Cotizaciones Materiales', desc: 'Crear y gestionar', path: '/cotizaciones_materiales', perm: 'acceso_cotizaciones', listo: true },
@@ -14,11 +14,9 @@
 		{ icon: '📋', title: 'Inventario', desc: 'Stock y categorías', path: '', perm: 'acceso_inventario', listo: false },
 		{ icon: '💰', title: 'Nóminas', desc: 'Sueldos semanales', path: '', perm: 'acceso_nominas', listo: false },
 		{ icon: '🏭', title: 'Proveedores', desc: 'Catálogo PROV', path: '', perm: 'acceso_proveedores', listo: false },
-		{ icon: '🧾', title: 'Órdenes de Compra', desc: 'Folio OC', path: '', perm: 'acceso_oc', listo: false },
-		{ icon: '⚙️', title: 'Configuración', desc: 'Sistema y PWA', path: '/config', perm: null, listo: true }
+		{ icon: '🧾', title: 'Órdenes de Compra', desc: 'Folio OC', path: '', perm: 'acceso_oc', listo: false }
 	];
 
-	let kpis = [];
 	let user = null;
 
 	function visible(mod) {
@@ -27,6 +25,11 @@
 
 	function go(mod) {
 		if (mod.listo && mod.path) navigate(mod.path);
+	}
+
+	function handleLogout() {
+		auth.logout();
+		navigate('/login', { replace: true });
 	}
 
 	onMount(async () => {
@@ -40,18 +43,6 @@
 		} catch {
 			user = null;
 		}
-		try {
-			const res = await fetch('/dashboard/kpis', { headers: auth.authHeader() });
-			if (res.ok) {
-				const data = await res.json();
-				kpis = data.kpis || [];
-			} else if (res.status === 401 || res.status === 403) {
-				auth.logout();
-				navigate('/login', { replace: true });
-			}
-		} catch (e) {
-			console.error('Error cargando KPIs:', e);
-		}
 	});
 </script>
 
@@ -60,18 +51,12 @@
 		<div class="brand-col">
 			<h1 class="brand"><img class="brand-logo" src="/admon_logo.png" alt="Admon" /> Admon</h1>
 		</div>
-	</div>
-
-	{#if kpis.length > 0}
-		<div class="grid-2" style="margin-bottom: 0.75rem;">
-			{#each kpis as kpi}
-				<div class="card">
-					<p style="color: var(--color-text-muted); font-size: 0.7rem; text-transform: uppercase; margin: 0 0 0.25rem;">{kpi.etiqueta}</p>
-					<p style="font-size: 1.5rem; font-weight: 700; margin: 0;">{kpi.valor}</p>
-				</div>
-			{/each}
+		<div style="flex:1"></div>
+		<div style="display:flex;gap:0.5rem">
+			<button class="btn btn-sm btn-secondary" on:click={() => navigate('/config')} title="Configuración">⚙️</button>
+			<button class="btn btn-sm btn-secondary" on:click={handleLogout} title="Cerrar sesión">🚪 Salir</button>
 		</div>
-	{/if}
+	</div>
 
 	<div class="menu-grid">
 		{#each modules as mod}

@@ -47,6 +47,7 @@
 
 <div class="page">
 	<div class="header">
+		<button class="btn btn-sm btn-secondary" on:click={() => navigate('/dashboard')} title="Volver">⬅️</button>
 		<h1>👥 Administrador de usuarios</h1>
 	</div>
 

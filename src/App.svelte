@@ -44,14 +44,6 @@
 		onlinePing().catch(() => {});
 	});
 
-	function logout() {
-		auth.logout();
-		navigate('/login', { replace: true });
-	}
-
-	function navClass(p) {
-		return 'nav-item' + ($path === p ? ' active' : '');
-	}
 </script>
 
 {#if !splashDone}
@@ -86,19 +78,6 @@
 		{/if}
 		<div class="version-badge">Admon v1.0.0</div>
 	</div>
-
-	{#if $auth.user}
-		<nav class="bottom-nav">
-			<a href="/dashboard" class={navClass('/dashboard')}><span class="nav-icon">📊</span><span>Panel</span></a>
-			<a href="/cotizaciones_materiales" class={navClass('/cotizaciones_materiales')}><span class="nav-icon">📦</span><span>Cotiz.</span></a>
-			{#if $auth.user.acceso_usuarios}
-				<a href="/usuarios" class={navClass('/usuarios')}><span class="nav-icon">👥</span><span>Usuarios</span></a>
-			{/if}
-			<a href="/telegram" class={navClass('/telegram')}><span class="nav-icon">📱</span><span>Telegram</span></a>
-			<a href="/config" class={navClass('/config')}><span class="nav-icon">⚙️</span><span>Config</span></a>
-			<button on:click={logout} class="nav-item" title="Cerrar sesión"><span class="nav-icon">🚪</span><span>Salir</span></button>
-		</nav>
-	{/if}
 {:else}
 	<div class="splash">
 		<img class="splash-logo-img" src="/admon_logo.png" alt="Admon ECCSA" />
