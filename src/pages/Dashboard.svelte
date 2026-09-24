@@ -7,7 +7,7 @@
 	// Solo módulos funcionales; cada tarjeta requiere su permiso activo.
 	const modules = [
 		{ icon: '📦', title: 'Cotizaciones Materiales', desc: 'Crear y gestionar', path: '/cotizaciones_materiales', perm: 'acceso_cotizaciones' },
-		{ icon: '📋', title: 'Reportes de Servicio', desc: 'Crear y gestionar reportes', path: '/reportes', perm: 'acceso_registro_reportes' },
+		{ icon: '📋', title: 'Registro de Reportes', desc: 'Visualización global admin', path: '/registro_reportes', perm: 'acceso_registro_reportes' },
 		{ icon: '👥', title: 'Administrador de Usuarios', desc: 'Usuarios y permisos', path: '/usuarios', perm: 'acceso_usuarios' },
 		{ icon: '📱', title: 'Telegram', desc: 'Bot y alertas', path: '/telegram', perm: 'acceso_telegram' },
 		{ icon: '📇', title: 'Clientes', desc: 'Catálogo general', path: '/clientes', perm: 'acceso_cotizaciones' }

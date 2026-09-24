@@ -20,9 +20,7 @@
 	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
 	import Clientes from './pages/Clientes.svelte';
 	import ClienteDetalle from './pages/ClienteDetalle.svelte';
-	import Reportes from './pages/Reportes.svelte';
-	import ReporteNuevo from './pages/ReporteNuevo.svelte';
-	import ReporteDetalle from './pages/ReporteDetalle.svelte';
+	import RegistroReportes from './pages/RegistroReportes.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
@@ -111,12 +109,8 @@
 				<Clientes />
 			{:else if $path.startsWith('/clientes/')}
 				<ClienteDetalle id={$path.split('/')[2]} />
-			{:else if $path === '/reportes'}
-				<Reportes />
-			{:else if $path === '/reporte_nuevo'}
-				<ReporteNuevo />
-			{:else if $path.startsWith('/reporte_detalle/')}
-				<ReporteDetalle id={$path.split('/')[2]} />
+			{:else if $path === '/registro_reportes'}
+				<RegistroReportes />
 			{:else if $path === '/config'}
 				<Config />
 		{:else}
