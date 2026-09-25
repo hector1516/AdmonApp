@@ -51,6 +51,7 @@ class UserInfo(BaseModel):
     acceso_usuarios: bool = False
     acceso_reportes: bool = False
     acceso_registro_reportes: bool = False
+    acceso_ia: bool = False
 
 
 # --- Auth Dependency ---
@@ -64,7 +65,7 @@ def _user_from_token(token: str):
         email = parts[0]
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -82,6 +83,7 @@ def _user_from_token(token: str):
                 "acceso_usuarios": row[10] == 1,
                 "acceso_reportes": row[11] == 1,
                 "acceso_registro_reportes": row[12] == 1,
+                "acceso_ia": row[13] == 1,
             }
         return None
     except Exception as e:
@@ -171,7 +173,7 @@ def _build_login_response(email: str, row) -> dict:
     expires_at = (timestamp + 7 * 24 * 3600) * 1000  # 7 días en ms
     # row: Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas,
     #      AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo,
-    #      AccesoTelegram, AccesoUsuarios
+    #      AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA
     b = lambda i: (row[i] == 1) if len(row) > i and row[i] is not None else False
     user = {
         "id": row[0], "nombre": row[1], "email": row[2],
@@ -180,6 +182,7 @@ def _build_login_response(email: str, row) -> dict:
         "acceso_oc": b(9), "acceso_calculo": b(10),
         "acceso_telegram": b(11), "acceso_usuarios": b(12),
         "acceso_reportes": b(13), "acceso_registro_reportes": b(14),
+        "acceso_ia": b(15),
     }
     return {"token": token, "user": user, "expiresAt": expires_at}
 
@@ -193,7 +196,7 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row and row[4] and row[3] == body.password:
@@ -1997,6 +2000,222 @@ async def api_reporte_enviar(id_reporte: int, email: str, current_user: dict = D
         raise HTTPException(status_code=500, detail=f"Error enviando email: {str(e)}")
 
 
+# ===== ECCSA IA CHAT (AccesoIA) =====
+
+class IaConversacionCreate(BaseModel):
+    titulo: str = "Nueva conversación"
+
+
+class IaMensajeCreate(BaseModel):
+    contenido: str
+
+
+def _require_ia(current_user: dict):
+    if not current_user.get("acceso_ia"):
+        raise HTTPException(status_code=403, detail="Requiere permiso de IA")
+
+
+def _clean_old_conversaciones(cursor):
+    """Elimina conversaciones y mensajes > 7 días"""
+    cursor.execute("""
+        DELETE FROM HUB_IaMensajes 
+        WHERE IdConversacion IN (
+            SELECT IdConversacion FROM HUB_IaConversaciones 
+            WHERE FechaActualizacion < DATEADD(day, -7, GETDATE())
+        )
+    """)
+    cursor.execute("""
+        DELETE FROM HUB_IaConversaciones 
+        WHERE FechaActualizacion < DATEADD(day, -7, GETDATE())
+    """)
+
+
+@app.get("/api/ia/conversaciones")
+async def ia_list_conversaciones(current_user: dict = Depends(get_current_user)):
+    _require_ia(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Limpiar viejas
+        _clean_old_conversaciones(cursor)
+        # Listar del usuario
+        cursor.execute("""
+            SELECT IdConversacion, Titulo, FechaCreacion, FechaActualizacion
+            FROM HUB_IaConversaciones
+            WHERE IdUsuario = %s AND Activo = 1
+            ORDER BY FechaActualizacion DESC
+        """, (current_user["id"],))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"IdConversacion": r[0], "Titulo": r[1], "FechaCreacion": r[2], "FechaActualizacion": r[3]} for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/ia/conversaciones")
+async def ia_create_conversacion(body: IaConversacionCreate, current_user: dict = Depends(get_current_user)):
+    _require_ia(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO HUB_IaConversaciones (IdUsuario, Titulo, FechaCreacion, FechaActualizacion, Activo)
+            VALUES (%s, %s, GETDATE(), GETDATE(), 1)
+        """, (current_user["id"], body.titulo[:200]))
+        cursor.execute("SELECT SCOPE_IDENTITY()")
+        row = cursor.fetchone()
+        id_conv = int(row[0]) if row else None
+        conn.commit()
+        conn.close()
+        return {"IdConversacion": id_conv, "Titulo": body.titulo, "FechaCreacion": datetime.now().isoformat(), "FechaActualizacion": datetime.now().isoformat()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/ia/conversaciones/{id_conversacion}/mensajes")
+async def ia_get_mensajes(id_conversacion: int, current_user: dict = Depends(get_current_user)):
+    _require_ia(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Verificar propiedad
+        cursor.execute("SELECT IdConversacion FROM HUB_IaConversaciones WHERE IdConversacion = %s AND IdUsuario = %s", (id_conversacion, current_user["id"]))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Conversación no encontrada")
+        # Obtener mensajes
+        cursor.execute("""
+            SELECT IdMensaje, Rol, Contenido, TokensEntrada, TokensSalida, Modelo, FechaCreacion
+            FROM HUB_IaMensajes
+            WHERE IdConversacion = %s
+            ORDER BY FechaCreacion
+        """, (id_conversacion,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"IdMensaje": r[0], "Rol": r[1], "Contenido": r[2], "TokensEntrada": r[3], "TokensSalida": r[4], "Modelo": r[5], "FechaCreacion": r[6]} for r in rows]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/ia/conversaciones/{id_conversacion}/mensajes")
+async def ia_send_mensaje(id_conversacion: int, body: IaMensajeCreate, current_user: dict = Depends(get_current_user)):
+    _require_ia(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Verificar propiedad
+        cursor.execute("SELECT IdConversacion FROM HUB_IaConversaciones WHERE IdConversacion = %s AND IdUsuario = %s", (id_conversacion, current_user["id"]))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Conversación no encontrada")
+
+        # Guardar mensaje del usuario
+        cursor.execute("""
+            INSERT INTO HUB_IaMensajes (IdConversacion, Rol, Contenido, FechaCreacion)
+            VALUES (%s, 'user', %s, GETDATE())
+        """, (id_conversacion, body.contenido))
+
+        # Actualizar fecha de conversación
+        cursor.execute("UPDATE HUB_IaConversaciones SET FechaActualizacion = GETDATE() WHERE IdConversacion = %s", (id_conversacion,))
+
+        conn.commit()
+
+        # Llamar a Gemini
+        try:
+            import google.generativeai as genai
+            import os
+            
+            api_key = os.getenv("GEMINI_API_KEY") or os.getenv("HUB_GEMINI_API_KEY")
+            if not api_key:
+                raise Exception("GEMINI_API_KEY no configurado")
+            
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            
+            # Obtener historial reciente (últimos 10 mensajes)
+            cursor.execute("""
+                SELECT Rol, Contenido FROM HUB_IaMensajes 
+                WHERE IdConversacion = %s 
+                ORDER BY FechaCreacion DESC
+            """, (id_conversacion,))
+            historial_rows = cursor.fetchall()
+            historial = [{"role": r[0] if r[0] in ("user", "model") else "user", "parts": [r[1]]} for r in reversed(historial_rows[-10:])]
+            
+            # Generar respuesta
+            chat = model.start_chat(history=historial[:-1] if len(historial) > 1 else [])
+            response = chat.send_message(body.contenido)
+            respuesta = response.text
+            
+            tokens_in = response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0
+            tokens_out = response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0
+            
+        except Exception as e:
+            respuesta = f"Error al consultar IA: {str(e)}"
+            tokens_in = 0
+            tokens_out = 0
+
+        # Guardar respuesta del assistant
+        cursor.execute("""
+            INSERT INTO HUB_IaMensajes (IdConversacion, Rol, Contenido, TokensEntrada, TokensSalida, Modelo, FechaCreacion)
+            VALUES (%s, 'assistant', %s, %s, %s, 'gemini-1.5-flash', GETDATE())
+        """, (id_conversacion, respuesta, tokens_in, tokens_out))
+
+        # Auto-título si es primera conversación
+        cursor.execute("SELECT Titulo FROM HUB_IaConversaciones WHERE IdConversacion = %s", (id_conversacion,))
+        titulo_row = cursor.fetchone()
+        titulo_actual = titulo_row[0] if titulo_row else "Nueva conversación"
+        nuevo_titulo = titulo_actual
+        if titulo_actual == "Nueva conversación":
+            # Generar título corto basado en el primer mensaje
+            corto = body.contenido[:50].strip()
+            if len(body.contenido) > 50:
+                corto += "..."
+            nuevo_titulo = corto
+            cursor.execute("UPDATE HUB_IaConversaciones SET Titulo = %s, FechaActualizacion = GETDATE() WHERE IdConversacion = %s", (nuevo_titulo, id_conversacion))
+        else:
+            cursor.execute("UPDATE HUB_IaConversaciones SET FechaActualizacion = GETDATE() WHERE IdConversacion = %s", (id_conversacion,))
+
+        conn.commit()
+
+        # Devolver mensajes actualizados
+        cursor.execute("""
+            SELECT IdMensaje, Rol, Contenido, TokensEntrada, TokensSalida, Modelo, FechaCreacion
+            FROM HUB_IaMensajes
+            WHERE IdConversacion = %s
+            ORDER BY FechaCreacion
+        """, (id_conversacion,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        mensajes = [{"IdMensaje": r[0], "Rol": r[1], "Contenido": r[2], "TokensEntrada": r[3], "TokensSalida": r[4], "Modelo": r[5], "FechaCreacion": r[6]} for r in rows]
+        return {"mensajes": mensajes, "titulo": nuevo_titulo}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/ia/conversaciones/{id_conversacion}")
+async def ia_delete_conversacion(id_conversacion: int, current_user: dict = Depends(get_current_user)):
+    _require_ia(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM HUB_IaConversaciones WHERE IdConversacion = %s AND IdUsuario = %s", (id_conversacion, current_user["id"]))
+        if cursor.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Conversación no encontrada")
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
 # El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque
 # (definido AL FINAL para no tapar las rutas de la API) sirve:
@@ -2014,7 +2233,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/", "ia"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}

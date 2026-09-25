@@ -23,6 +23,7 @@
 	import RegistroReportes from './pages/RegistroReportes.svelte';
 	import RegistroReporteDetalle from './pages/RegistroReporteDetalle.svelte';
 	import RegistroReportePreview from './pages/RegistroReportePreview.svelte';
+	import EccsaIa from './pages/EccsaIa.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
@@ -107,6 +108,8 @@
 				<UsuarioDetalle id={$path.split('/')[2]} />
 			{:else if $path === '/telegram'}
 				<Telegram />
+			{:else if $path === '/ia'}
+				<EccsaIa />
 {:else if $path === '/clientes'}
 				<Clientes />
 			{:else if $path.startsWith('/clientes/')}
