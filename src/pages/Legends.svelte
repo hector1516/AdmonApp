@@ -643,6 +643,11 @@
 				<div class="guide-item positive"><span>⛽ Ticket OxxoGas</span><span class="pts">+3</span></div>
 				<div class="guide-item positive"><span>✍️ Firma remota</span><span class="pts">+8</span></div>
 				<div class="guide-item positive"><span>🔥 Racha diaria</span><span class="pts">+3</span></div>
+				<div class="guide-item positive"><span>📤 Cotización enviada</span><span class="pts">+6</span></div>
+				<div class="guide-item positive"><span>📇 Cliente nuevo registrado</span><span class="pts">+4</span></div>
+				<div class="guide-item positive"><span>🗂️ Reporte registrado</span><span class="pts">+3</span></div>
+				<div class="guide-item positive"><span>📸 Fotos de evidencia</span><span class="pts">+2</span></div>
+				<div class="guide-item positive"><span>🧾 Cotización creada</span><span class="pts">+2</span></div>
 				<div class="guide-item negative"><span> Comida en reporte</span><span class="pts">-1</span></div>
 				<div class="guide-item negative"><span>🎫 Vale generado</span><span class="pts">-2</span></div>
 			</div>

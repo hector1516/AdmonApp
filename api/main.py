@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 import pymssql
 import os
 import json
+import base64
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -844,6 +845,11 @@ async def cotizacion_create(body: CotizacionCreate, current_user: dict = Depends
         folio = _db_create_quotation(cursor, idc, body.contacto, body.descripcion, current_user.get("nombre") or current_user.get("email"))
         conn.commit()
         conn.close()
+        # Legends: +2 por cotización creada (idempotente por folio)
+        try:
+            legends_registrar_metrica(current_user["id"], "cotizacion_creada", referencia_id=int(folio))
+        except Exception:
+            pass
         return {"folio": folio, "folio_fmt": _fmt_folio(folio)}
     except HTTPException:
         raise
@@ -1064,6 +1070,11 @@ async def cotizacion_enviar(folio: int, body: CotizacionEnviar, current_user: di
                             current_user.get("email"), cc_email=current_user.get("email"))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo enviar: {str(e)[:200]}")
+    # Legends: +6 por envío real de cotización (idempotente: 1× por folio)
+    try:
+        legends_registrar_metrica(current_user["id"], "cotizacion_enviada", referencia_id=int(folio))
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -1200,6 +1211,11 @@ async def cliente_create(body: ClienteCreate, current_user: dict = Depends(get_c
         )
         conn.commit()
         conn.close()
+        # Legends: +4 por alta de cliente nuevo (IdCliente es varchar → sin ref int)
+        try:
+            legends_registrar_metrica(current_user["id"], "cliente_alta")
+        except Exception:
+            pass
         return {"ok": True, "id_cliente": idc}
     except HTTPException:
         raise
@@ -1674,6 +1690,12 @@ async def api_create_reporte(body: ReporteCreate, current_user: dict = Depends(g
             conn.commit()
 
         conn.close()
+        # Legends: +3 por registro de reporte (idempotente por id)
+        if id_reporte:
+            try:
+                legends_registrar_metrica(current_user["id"], "reporte_creado", referencia_id=int(id_reporte))
+            except Exception:
+                pass
         return {"ok": True, "folio": folio, "id_reporte": id_reporte}
     except HTTPException:
         raise
@@ -1808,7 +1830,19 @@ async def api_get_fotos(id_reporte: int, current_user: dict = Depends(get_curren
         cursor.execute("SELECT IdFoto, FotoComprimida, Orden FROM ReportesServicioFotos WHERE IdReporte = %s ORDER BY Orden", (int(id_reporte),))
         rows = cursor.fetchall()
         conn.close()
-        return [{"id": r[0], "base64": r[1], "orden": r[2]} for r in rows]
+        # La BD guarda JPEG crudos (varbinary, igual que HUB/Field); el frontend
+        # espera base64 ( <img src="data:image/jpeg;base64,{base64}"> ).
+        # Compat doble: si la fila ya es texto base64 ASCII, se devuelve tal cual.
+        result = []
+        for r in rows:
+            foto = r[1]
+            if isinstance(foto, (bytes, bytearray)):
+                if foto[:2] in (b"\xff\xd8", b"\x89P") or len(foto) > 4096:
+                    foto = base64.b64encode(bytes(foto)).decode("ascii")
+                else:
+                    foto = bytes(foto).decode("ascii", errors="replace")
+            result.append({"id": r[0], "base64": foto, "orden": r[2]})
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -1820,10 +1854,27 @@ async def api_save_fotos(id_reporte: int, body: ReporteFotosSave, current_user: 
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM ReportesServicioFotos WHERE IdReporte = %s", (int(id_reporte),))
+        # FotoComprimida es varbinary con JPEG crudos (convención HUB/Field);
+        # hay que decodificar el base64 del frontend a bytes, si no SQL Server
+        # rechaza el nvarchar con error 257.
+        fotos_bytes = []
         for i, b64 in enumerate(body.fotos):
-            cursor.execute("INSERT INTO ReportesServicioFotos (IdReporte, FotoComprimida, Orden) VALUES (%s, %s, %s)", (int(id_reporte), b64, i))
+            try:
+                fotos_bytes.append(base64.b64decode(b64.split(",")[-1]))
+            except Exception:
+                conn.close()
+                raise HTTPException(status_code=400, detail=f"Foto {i + 1}: base64 inválido.")
+        for i, foto_bytes in enumerate(fotos_bytes):
+            cursor.execute("INSERT INTO ReportesServicioFotos (IdReporte, FotoComprimida, Orden) VALUES (%s, %s, %s)", (int(id_reporte), foto_bytes, i))
         conn.commit()
         conn.close()
+        # Legends: +2 por evidencia fotográfica, 1× por reporte aunque se
+        # vuelvan a guardar las fotos (el endpoint reemplaza el set completo)
+        if body.fotos:
+            try:
+                legends_registrar_metrica(current_user["id"], "reporte_fotos", referencia_id=int(id_reporte))
+            except Exception:
+                pass
         return {"ok": True, "guardadas": len(body.fotos)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
@@ -2862,6 +2913,12 @@ LEGENDS_METRICAS = {
     "firma_remota":      8,
     "servicio":          0,  # Calculado dinámicamente por legends_registrar_puntos_servicio
     "racha_dia":         3,
+    # ── Métricas propias de Admon (oficina) ──
+    "cotizacion_enviada":  6,   # Envío real por correo (1× por folio)
+    "cliente_alta":        4,   # Alta de cliente nuevo
+    "reporte_creado":      3,   # Registro de reporte de servicio
+    "reporte_fotos":       2,   # Evidencia fotográfica (1× por reporte)
+    "cotizacion_creada":   2,   # Cotización creada desde cero
 }
 
 LEGENDS_NIVELES = [
@@ -2888,6 +2945,11 @@ LEGENDS_METRICA_DESC = {
     "firma_remota":     ("Firma remota de reporte", "📱", 8),
     "servicio":         ("Servicio registrado", "🔧", 0),
     "racha_dia":        ("Racha diaria activa", "🔥", 3),
+    "cotizacion_enviada": ("Cotización enviada", "📤", 6),
+    "cliente_alta":     ("Cliente nuevo registrado", "📇", 4),
+    "reporte_creado":   ("Reporte de servicio registrado", "🗂️", 3),
+    "reporte_fotos":    ("Fotos de evidencia subidas", "📸", 2),
+    "cotizacion_creada": ("Cotización creada", "🧾", 2),
 }
 
 
@@ -3046,6 +3108,9 @@ def legends_registrar_metrica(id_usuario: int, metrica: str, referencia_id: int 
     _idempotent = {
         "reporte_firmado", "ticket_oxxogas", "vale_generado",
         "comida_reporte", "servicio", "firma_remota",
+        # Admon: reenviar cotización, reintentar insert o volver a guardar
+        # las fotos del MISMO reporte no debe volver a sumar.
+        "cotizacion_enviada", "cotizacion_creada", "reporte_creado", "reporte_fotos",
     }
     if metrica in _idempotent and referencia_id is not None:
         conn0 = get_connection()
