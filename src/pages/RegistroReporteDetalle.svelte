@@ -163,12 +163,9 @@
 	}
 
 	async function abrirPreview() {
+		// Navegar a página completa de preview en lugar de modal
 		if (!(await loadPdfBlob())) return;
-		showPdfPreview = true;
-	}
-
-	function cerrarPreview() {
-		showPdfPreview = false;
+		navigate(`/registro_reportes/${idReporte}/preview`);
 	}
 
 	// Alias para compatibilidad
@@ -540,25 +537,6 @@
 				</div>
 			{/if}
 		</div>
-
-		<!-- PDF Preview Modal -->
-		{#if showPdfPreview}
-			<div class="modal-overlay" on:click={cerrarPreview}>
-				<div class="modal modal-large" on:click={(e) => e.stopPropagation()}>
-					<div class="modal-header">
-						<h3>👁️ Previsualizar: {reporte.Folio}</h3>
-						<button class="btn btn-sm btn-ghost" on:click={cerrarPreview}>✕</button>
-					</div>
-					<div class="modal-body" style="padding: 0; height: 70vh;">
-						<iframe 
-							src={URL.createObjectURL(pdfBlob)} 
-							style="width: 100%; height: 100%; border: none;"
-							title="PDF Preview"
-						></iframe>
-					</div>
-				</div>
-			</div>
-		{/if}
 	{/if}
 </div>
 
@@ -576,4 +554,7 @@
 	.modal-header h3 { margin: 0; font-size: 1.1rem; }
 	.modal-body { flex: 1; overflow: auto; }
 	.btn-ghost { background: transparent; border: none; color: var(--color-text-muted); cursor: pointer; padding: 0.5rem; }
+	.btn-info { background: var(--color-primary); color: white; border: none; }
+	.btn-info:hover:not(:disabled) { filter: brightness(1.1); }
+	.btn-info:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

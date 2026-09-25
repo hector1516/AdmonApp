@@ -22,6 +22,7 @@
 	import ClienteDetalle from './pages/ClienteDetalle.svelte';
 	import RegistroReportes from './pages/RegistroReportes.svelte';
 	import RegistroReporteDetalle from './pages/RegistroReporteDetalle.svelte';
+	import RegistroReportePreview from './pages/RegistroReportePreview.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 
@@ -112,6 +113,8 @@
 				<ClienteDetalle id={$path.split('/')[2]} />
 			{:else if $path === '/registro_reportes'}
 				<RegistroReportes />
+			{:else if $path.startsWith('/registro_reportes/') && $path.endsWith('/preview')}
+				<RegistroReportePreview id={$path.split('/')[2]} />
 			{:else if $path.startsWith('/registro_reportes/')}
 				<RegistroReporteDetalle id={$path.split('/')[2]} />
 			{:else if $path === '/config'}
