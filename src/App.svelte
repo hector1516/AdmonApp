@@ -26,6 +26,7 @@
 	import EccsaIa from './pages/EccsaIa.svelte';
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
+	import Legends from './pages/Legends.svelte';
 
 	let ready = $state(false);
 	let splashDone = $state(false);
@@ -122,6 +123,8 @@
 				<RegistroReporteDetalle id={$path.split('/')[2]} />
 			{:else if $path === '/config'}
 				<Config />
+			{:else if $path === '/legends'}
+				<Legends />
 		{:else}
 			<Dashboard />
 		{/if}

@@ -15,4 +15,10 @@ db.version(1).stores({
 	syncQueue: '++id, entity, action, idLocal, timestamp'
 });
 
+// v2: caché offline de ECCSA Legends (score, ranking, winners, avatar, etc.)
+// Espejo de legendsCache en fieldDb — clave 'id' del item cacheado.
+db.version(2).stores({
+	legendsCache: 'id, ts'
+});
+
 export default db;

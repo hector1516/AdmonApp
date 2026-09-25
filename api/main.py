@@ -1891,6 +1891,16 @@ async def api_save_firma(id_reporte: int, body: ReporteSignatureSave, current_us
         cursor.execute("SELECT Folio FROM ReportesServicio WHERE IdReporte = %s", (int(id_reporte),))
         row = cursor.fetchone()
         conn.close()
+        # Legends: mismos puntos que Field al firmar (+10 al firmante y
+        # horas de servicio a los participantes; idempotente por ReferenciaId)
+        try:
+            legends_registrar_metrica(current_user["id"], "reporte_firmado", referencia_id=int(id_reporte))
+        except Exception:
+            pass
+        try:
+            legends_registrar_puntos_servicio(int(id_reporte))
+        except Exception:
+            pass
         return {"ok": True, "folio": row[0] if row else ""}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
@@ -2832,6 +2842,759 @@ async def passkey_delete(pid: int, current_user: dict = Depends(get_current_user
     return {"ok": True}
 
 
+# --- ECCSA Legends — port desde Field (api/routers/legends.py) ----------------
+# Sistema gamificado de puntos/ranking sobre las MISMAS tablas compartidas:
+#   HUB_UserScores (semanal+total+nivel+racha), HUB_ScoreLog (bitácora),
+#   HUB_UserAvatars, HUB_WeeklyWinners, HUB_Users.Nickname + HUB_Passkeys.
+# El cron semanal (ganador + reset domingo 3 AM) lo ejecuta Field
+# (program legends_cron en su supervisord) sobre la misma BD; aquí solo
+# exponemos los endpoints de lectura, /award y el cálculo manual.
+# Diferencias con Field: auth = get_current_user (token simple email|ts),
+# push adaptado al esquema de Admon (HUB_PushSubscriptions.UserEmail +
+# VAPID en HUB_PushConfig), y conexiones siempre cerradas.
+
+LEGENDS_METRICAS = {
+    "reporte_firmado":  10,
+    "kilometro":         5,
+    "ticket_oxxogas":    3,
+    "vale_generado":    -2,
+    "comida_reporte":   -1,
+    "firma_remota":      8,
+    "servicio":          0,  # Calculado dinámicamente por legends_registrar_puntos_servicio
+    "racha_dia":         3,
+}
+
+LEGENDS_NIVELES = [
+    ("Diamante", 3500),
+    ("Oro",      1500),
+    ("Plata",     500),
+    ("Bronce",      0),
+]
+
+LEGENDS_ICONO = {
+    "Diamante": "💎",
+    "Oro":      "🥇",
+    "Plata":    "🥈",
+    "Bronce":   "🥉",
+}
+
+# Descripciones legibles de las métricas (para /score-log)
+LEGENDS_METRICA_DESC = {
+    "reporte_firmado":  ("Reporte firmado", "✍️", 10),
+    "kilometro":        ("Kilómetros registrados", "⛽", 5),
+    "ticket_oxxogas":   ("Ticket OxxoGas", "🎫", 3),
+    "vale_generado":    ("Vale generado", "💰", -2),
+    "comida_reporte":   ("Hora de comida en reporte", "🍽️", -1),
+    "firma_remota":     ("Firma remota de reporte", "📱", 8),
+    "servicio":         ("Servicio registrado", "🔧", 0),
+    "racha_dia":        ("Racha diaria activa", "🔥", 3),
+}
+
+
+def legends_calcular_nivel(puntos: int) -> str:
+    """Nivel gamificado según puntuación total acumulada."""
+    for nombre, min_pts in LEGENDS_NIVELES:
+        if puntos >= min_pts:
+            return nombre
+    return "Bronce"
+
+
+def legends_push_all(title: str, body: str):
+    """Push a TODOS los suscriptores (esquema Admon: UserEmail + HUB_PushConfig).
+    Best-effort: cualquier error se imprime y nunca rompe el flujo."""
+    try:
+        import json as _json
+        from pywebpush import webpush
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT VapidPrivateKey FROM HUB_PushConfig WHERE Id = 1")
+            vk = cursor.fetchone()
+            if not vk or not vk[0]:
+                return
+            priv_key = vk[0].strip()
+            cursor.execute("SELECT Endpoint, P256dhKey, AuthKey FROM HUB_PushSubscriptions")
+            subs = cursor.fetchall()
+        finally:
+            conn.close()
+        if not subs:
+            return
+        payload = _json.dumps({"title": title, "body": body})
+        for endpoint, p256dh, auth_key in subs:
+            try:
+                webpush(
+                    subscription_info={
+                        "endpoint": endpoint,
+                        "keys": {"p256dh": p256dh, "auth": auth_key},
+                    },
+                    data=payload,
+                    vapid_private_key=priv_key,
+                    vapid_claims={"sub": "mailto:robot@ecc-sa.com.mx"},
+                )
+            except Exception:
+                # Suscripción vencida o error transitorio: no afecta a las demás
+                pass
+    except Exception as e:
+        print(f"[legends push] {e}", flush=True)
+
+
+def legends_notify_level_up(user_id: int, new_level: str):
+    """Notifica a TODOS cuando alguien sube de nivel."""
+    try:
+        emoji = LEGENDS_ICONO.get(new_level, "🎯")
+        legends_push_all("🎉 ¡Sube de nivel!", f"{legends_get_display_name(user_id)} alcanzó nivel {new_level} {emoji}")
+    except Exception:
+        pass
+
+
+def legends_notify_ranking_pass(user_id: int, passed_user_id: int, new_position: int):
+    """Notifica a TODOS cuando alguien pasa a otro en el ranking."""
+    try:
+        passer = legends_get_display_name(user_id)
+        passed = legends_get_display_name(passed_user_id)
+        legends_push_all(
+            "🏆 ¡Movimiento en el ranking!",
+            f"{passer} pasó a {passed} — ahora en posición #{new_position}",
+        )
+    except Exception:
+        pass
+
+
+def legends_notify_weekly_winner(user_id: int, points: int):
+    """Notifica a TODOS cuando se elige al ganador semanal."""
+    try:
+        name = legends_get_display_name(user_id)
+        legends_push_all("🏆 ¡Ganador de la semana!", f"{name} ganó la semana con {points} puntos")
+    except Exception:
+        pass
+
+
+def legends_get_display_name(user_id: int) -> str:
+    """Nombre para mostrar: Nickname de Legends si existe, si no Nombre."""
+    try:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor(as_dict=True)
+            cursor.execute("SELECT Nombre, Nickname FROM HUB_Users WHERE Id = %s", (user_id,))
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return "Alguien"
+        nick = (row.get("Nickname") or "").strip()
+        return nick or (row.get("Nombre") or "Alguien")
+    except Exception:
+        return "Alguien"
+
+
+def legends_get_posicion(user_id: int) -> int:
+    """Posición actual del usuario en el ranking semanal (1-based)."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT PuntuacionSemanal FROM HUB_UserScores WHERE IdUsuario = %s", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return 999
+        weekly = row["PuntuacionSemanal"]
+        cursor.execute("""
+            SELECT COUNT(*) AS total
+            FROM HUB_UserScores s
+            JOIN HUB_Users u ON s.IdUsuario = u.Id
+            WHERE u.Activo = 1 AND s.PuntuacionSemanal > %s
+        """, (weekly,))
+        r = cursor.fetchone()
+        return (r["total"] + 1) if r else 1
+    finally:
+        conn.close()
+
+
+def legends_usuario_pasado(user_id: int, old_pos: int) -> Optional[int]:
+    """Id del usuario que se dejó de encabezar al subir en el ranking, o None."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT IdUsuario FROM (
+                SELECT s.IdUsuario,
+                       ROW_NUMBER() OVER (ORDER BY s.PuntuacionSemanal DESC) AS rn
+                FROM HUB_UserScores s
+                JOIN HUB_Users u ON s.IdUsuario = u.Id
+                WHERE u.Activo = 1
+            ) t
+            WHERE rn = %s
+        """, (old_pos,))
+        row = cursor.fetchone()
+        if row and row["IdUsuario"] != user_id:
+            return row["IdUsuario"]
+        return None
+    finally:
+        conn.close()
+
+
+def legends_registrar_metrica(id_usuario: int, metrica: str, referencia_id: int = None, puntos_override: int = None):
+    """Registra una métrica y actualiza la puntuación del usuario.
+    Solo otorga puntos si el usuario tiene passkey (nickname).
+    Detecta cambios de nivel y ranking para notificar. Port exacto de
+    Field `_registrar_metrica` (idempotencia por ReferenciaId incluida)."""
+    if metrica not in LEGENDS_METRICAS and puntos_override is None:
+        return
+    puntos = puntos_override if puntos_override is not None else LEGENDS_METRICAS[metrica]
+
+    # Idempotencia: métricas con ReferenciaId = entidad única no deben repetirse.
+    # 'kilometro' excluido: su ReferenciaId es el vehículo, no el registro de km.
+    _idempotent = {
+        "reporte_firmado", "ticket_oxxogas", "vale_generado",
+        "comida_reporte", "servicio", "firma_remota",
+    }
+    if metrica in _idempotent and referencia_id is not None:
+        conn0 = get_connection()
+        try:
+            with conn0.cursor() as cur0:
+                cur0.execute(
+                    "SELECT 1 AS existe FROM HUB_ScoreLog WHERE IdUsuario=%s AND Metrica=%s AND ReferenciaId=%s",
+                    (id_usuario, metrica, referencia_id),
+                )
+                if cur0.fetchone():
+                    return
+        finally:
+            conn0.close()
+
+    old_level = None
+    old_pos = None
+    new_level = None
+    nueva_semanal = 0
+
+    conn = get_connection()
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            # Elegibilidad: passkey (identidad) + Nickname en HUB_Users
+            cur.execute("""
+                SELECT TOP 1 1 AS existe FROM HUB_Users u
+                WHERE u.Id = %s
+                  AND u.Nickname IS NOT NULL AND LTRIM(RTRIM(u.Nickname)) <> ''
+                  AND EXISTS (SELECT 1 FROM HUB_Passkeys p WHERE p.IdUsuario = u.Id)
+            """, (id_usuario,))
+            if not cur.fetchone():
+                return
+
+            # Capturar estado ANTES del update
+            cur.execute("SELECT PuntuacionSemanal, PuntuacionTotal, Nivel FROM HUB_UserScores WHERE IdUsuario = %s", (id_usuario,))
+            row = cur.fetchone()
+            old_level = row["Nivel"] if row else "Bronce"
+            old_weekly = row["PuntuacionSemanal"] if row else 0
+            old_total = row["PuntuacionTotal"] if row else 0
+
+            # Posición anterior
+            cur.execute("""
+                SELECT COUNT(*) AS total FROM HUB_UserScores s
+                JOIN HUB_Users u ON s.IdUsuario = u.Id
+                WHERE u.Activo = 1 AND s.PuntuacionSemanal > %s
+            """, (old_weekly,))
+            old_pos = (cur.fetchone()["total"] + 1) if row else 999
+
+            # Insertar log (re-chequeo dentro de la misma conexión por si hubo carrera)
+            if metrica in _idempotent and referencia_id is not None:
+                cur.execute(
+                    "SELECT 1 AS existe FROM HUB_ScoreLog WHERE IdUsuario=%s AND Metrica=%s AND ReferenciaId=%s",
+                    (id_usuario, metrica, referencia_id),
+                )
+                if cur.fetchone():
+                    return
+            cur.execute(
+                "INSERT INTO HUB_ScoreLog (IdUsuario, Metrica, Puntos, ReferenciaId) VALUES (%s, %s, %s, %s)",
+                (id_usuario, metrica, puntos, referencia_id)
+            )
+
+            # Actualizar score
+            if row:
+                nueva_semanal = old_weekly + puntos
+                nueva_total = old_total + puntos
+                new_level = legends_calcular_nivel(nueva_total)
+                cur.execute(
+                    "UPDATE HUB_UserScores SET PuntuacionSemanal = %s, PuntuacionTotal = %s, Nivel = %s, UltimoActivo = GETDATE(), FechaCalculo = GETDATE() WHERE IdUsuario = %s",
+                    (nueva_semanal, nueva_total, new_level, id_usuario)
+                )
+            else:
+                nueva_semanal = max(puntos, 0)
+                nueva_total = max(puntos, 0)
+                new_level = legends_calcular_nivel(nueva_total)
+                cur.execute(
+                    "INSERT INTO HUB_UserScores (IdUsuario, PuntuacionSemanal, PuntuacionTotal, Nivel, UltimoActivo) VALUES (%s, %s, %s, %s, GETDATE())",
+                    (id_usuario, nueva_semanal, nueva_total, new_level)
+                )
+
+            conn.commit()
+    finally:
+        conn.close()
+
+    # Notificaciones fuera del cursor (best-effort, igual que Field)
+    if puntos != 0:
+        try:
+            if new_level != old_level:
+                legends_notify_level_up(id_usuario, new_level)
+            if puntos > 0 and old_pos is not None:
+                new_pos = legends_get_posicion(id_usuario)
+                if new_pos < old_pos:
+                    passed_id = legends_usuario_pasado(id_usuario, old_pos)
+                    if passed_id:
+                        legends_notify_ranking_pass(id_usuario, passed_id, new_pos)
+        except Exception:
+            pass
+
+
+def legends_registrar_puntos_servicio(id_reporte: int):
+    """Calcula y registra puntos por horas de servicio firmado.
+
+    También otorga +10 por reporte_firmado si no se ha registrado antes.
+    Si TiempoComida=True, aplica -1 punto de penalización.
+
+    Fórmula:
+      HorasTotales = (FechaHoraFin - FechaHoraInicio)
+      HorasNetas   = HorasTotales - TiempoTraslado - (TiempoComida ? 1 : 0)
+      PuntosPersona = max(floor(HorasNetas / NumIngenieros), 1)
+    """
+    import math
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor(as_dict=True) as cur:
+                cur.execute("""
+                    SELECT IdReporte, Tecnico, FechaHoraInicio, FechaHoraFin,
+                           TiempoTraslado, TiempoComida, Estatus
+                    FROM ReportesServicio WHERE IdReporte = %s
+                """, (id_reporte,))
+                reporte = cur.fetchone()
+                if not reporte or reporte['Estatus'] != 'Firmado':
+                    return 0
+                if not reporte['FechaHoraInicio'] or not reporte['FechaHoraFin']:
+                    return 0
+
+                # Otorgar +10 por reporte_firmado si no existe en ScoreLog
+                cur.execute("SELECT 1 AS existe FROM HUB_ScoreLog WHERE ReferenciaId = %s AND Metrica = 'reporte_firmado'", (id_reporte,))
+                if not cur.fetchone():
+                    # Buscar IdUsuario del técnico principal
+                    cur.execute("SELECT Id FROM HUB_Users WHERE Nombre = %s AND Activo = 1", (reporte['Tecnico'],))
+                    u = cur.fetchone()
+                    if u:
+                        legends_registrar_metrica(u['Id'], 'reporte_firmado', referencia_id=id_reporte)
+
+                horas_totales = (reporte['FechaHoraFin'] - reporte['FechaHoraInicio']).total_seconds() / 3600.0
+                if horas_totales <= 0:
+                    return 0
+
+                traslado = float(reporte['TiempoTraslado'] or 0)
+                comida = 1.0 if reporte['TiempoComida'] else 0.0
+                horas_netas = horas_totales - traslado - comida
+                if horas_netas <= 0:
+                    return 0
+
+                # Participantes (técnico principal + adicionales)
+                cur.execute("""
+                    SELECT u.Nombre FROM ReportesServicioTecnicos t
+                    JOIN HUB_Users u ON t.IdUsuario = u.Id WHERE t.IdReporte = %s
+                """, (id_reporte,))
+                adicionales = [r['Nombre'] for r in cur.fetchall()]
+                participantes = [reporte['Tecnico']] + adicionales
+                num = len(participantes)
+                pts = max(math.floor(horas_netas / num), 1)
+
+                count = 0
+                for nombre in participantes:
+                    cur.execute("SELECT Id FROM HUB_Users WHERE Nombre = %s AND Activo = 1", (nombre,))
+                    u = cur.fetchone()
+                    if not u:
+                        continue
+                    legends_registrar_metrica(u['Id'], 'servicio', referencia_id=id_reporte, puntos_override=pts)
+                    # Penalización por comida: -1 punto
+                    if reporte['TiempoComida']:
+                        legends_registrar_metrica(u['Id'], 'comida_reporte', referencia_id=id_reporte, puntos_override=-1)
+                    count += 1
+
+                conn.commit()
+                print(f"[legends] Reporte {id_reporte}: {pts} pts x {count} ingenieros ({horas_netas:.1f}h netas)", flush=True)
+                return pts * count
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"legends_registrar_puntos_servicio error: {e}", flush=True)
+        return 0
+
+
+# --- Legends endpoints ---
+
+@app.get("/api/legends/score")
+async def legends_score(current_user: dict = Depends(get_current_user)):
+    """Puntuación del usuario actual (semanal + total + nivel + racha)."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT Id FROM HUB_UserAvatars WHERE IdUsuario = %s", (current_user["id"],))
+        tiene_avatar = bool(cursor.fetchone())
+        # Nickname vive en HUB_Users (migración 0034); la passkey solo da elegibilidad
+        cursor.execute("SELECT TOP 1 Nickname FROM HUB_Users WHERE Id = %s", (current_user["id"],))
+        u_row = cursor.fetchone()
+        nickname = (u_row.get("Nickname") or None) if u_row else None
+        cursor.execute("SELECT TOP 1 1 AS existe FROM HUB_Passkeys WHERE IdUsuario = %s", (current_user["id"],))
+        tiene_passkey = bool(cursor.fetchone())
+        cursor.execute("SELECT * FROM HUB_UserScores WHERE IdUsuario = %s", (current_user["id"],))
+        row = cursor.fetchone()
+        if not row:
+            return {
+                "puntuacion_semanal": 0, "puntuacion_total": 0,
+                "racha_dias": 0, "nivel": "Bronce",
+                "icono_nivel": "🥉", "ultimo_activo": None, "tiene_avatar": tiene_avatar,
+                "nickname": nickname, "tiene_passkey": tiene_passkey,
+            }
+        return {
+            "puntuacion_semanal": row["PuntuacionSemanal"],
+            "puntuacion_total": row["PuntuacionTotal"],
+            "racha_dias": row["RachaDias"],
+            "nivel": row["Nivel"],
+            "icono_nivel": LEGENDS_ICONO.get(row["Nivel"], "🥉"),
+            "ultimo_activo": row["UltimoActivo"].isoformat() if row["UltimoActivo"] else None,
+            "tiene_avatar": tiene_avatar,
+            "nickname": nickname,
+            "tiene_passkey": tiene_passkey,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/legends/score-log")
+async def legends_score_log(current_user: dict = Depends(get_current_user)):
+    """Bitácora semanal de puntos del usuario actual.
+    Muestra cada evento que sumó o restó puntos esta semana.
+    Se resetea cada domingo 3 AM igual que los puntos."""
+    import datetime as _dt
+    today = _dt.date.today()
+    sunday = today - _dt.timedelta(days=(today.weekday() + 1) % 7)
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT Id, Metrica, Puntos, ReferenciaId, FechaRegistro
+            FROM HUB_ScoreLog
+            WHERE IdUsuario = %s AND FechaRegistro >= %s
+              AND Metrica != 'sync_completado'
+            ORDER BY FechaRegistro DESC
+        """, (current_user["id"], sunday))
+        logs = cursor.fetchall()
+
+        # Enriquecer con descripciones legibles
+        result = []
+        for log in logs:
+            metrica = log["Metrica"]
+            desc, icono, _pts_base = LEGENDS_METRICA_DESC.get(metrica, (metrica, "📌", 0))
+            result.append({
+                "id": log["Id"],
+                "metrica": metrica,
+                "descripcion": desc,
+                "icono": icono,
+                "puntos": log["Puntos"],
+                "fecha": log["FechaRegistro"].isoformat() if log["FechaRegistro"] else None,
+                "referencia_id": log["ReferenciaId"],
+            })
+
+        # Total de la semana (excluye métricas retiradas)
+        cursor.execute("""
+            SELECT ISNULL(SUM(Puntos), 0) AS total
+            FROM HUB_ScoreLog
+            WHERE IdUsuario = %s AND FechaRegistro >= %s
+              AND Metrica != 'sync_completado'
+        """, (current_user["id"], sunday))
+        total_semana = cursor.fetchone()["total"]
+
+        return {
+            "semana_inicio": sunday.isoformat(),
+            "total_semana": total_semana,
+            "eventos": result,
+            "cron_info": "Los puntos se sincronizan en tiempo real. El ranking se calcula cada domingo a las 3:00 AM y los puntos se resetean.",
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/legends/ranking")
+async def legends_ranking(current_user: dict = Depends(get_current_user)):
+    """Ranking semanal de todos los usuarios activos con passkey."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT u.Id AS IdUsuario, u.Nombre,
+                   ISNULL(s.PuntuacionSemanal, 0) AS PuntuacionSemanal,
+                   ISNULL(s.PuntuacionTotal, 0) AS PuntuacionTotal,
+                   ISNULL(s.Nivel, 'Bronce') AS Nivel,
+                   ISNULL(s.RachaDias, 0) AS RachaDias,
+                   a.AvatarBase64, a.AvatarUrl,
+                   u.Nickname AS Nickname
+            FROM HUB_Users u
+            INNER JOIN HUB_Passkeys p ON u.Id = p.IdUsuario
+            LEFT JOIN HUB_UserScores s ON u.Id = s.IdUsuario
+            LEFT JOIN HUB_UserAvatars a ON u.Id = a.IdUsuario
+            WHERE u.Activo = 1
+            GROUP BY u.Id, u.Nombre, s.PuntuacionSemanal, s.PuntuacionTotal,
+                     s.Nivel, s.RachaDias, a.AvatarBase64, a.AvatarUrl, u.Nickname
+            ORDER BY ISNULL(s.PuntuacionSemanal, 0) DESC
+        """)
+        rows = cursor.fetchall()
+        ranking = []
+        for i, r in enumerate(rows):
+            ranking.append({
+                "posicion": i + 1,
+                "id_usuario": r["IdUsuario"],
+                "nombre": r.get("Nickname") or r["Nombre"],
+                "puntuacion_semanal": r["PuntuacionSemanal"],
+                "puntuacion_total": r["PuntuacionTotal"],
+                "nivel": r["Nivel"],
+                "icono_nivel": LEGENDS_ICONO.get(r["Nivel"], "🥉"),
+                "racha_dias": r["RachaDias"],
+                "avatar": r["AvatarBase64"] or r.get("AvatarUrl"),
+                "es_yo": r["IdUsuario"] == current_user["id"],
+            })
+        return {"ranking": ranking}
+    finally:
+        conn.close()
+
+
+@app.get("/api/legends/winners")
+async def legends_winners(current_user: dict = Depends(get_current_user)):
+    """Historial de ganadores semanales (últimas 12 semanas)."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT TOP 12 w.PuntuacionSemana, w.FechaInicio, w.FechaFin,
+                   w.FechaCalculo, u.Nombre, u.Nickname
+            FROM HUB_WeeklyWinners w
+            JOIN HUB_Users u ON w.IdUsuario = u.Id
+            ORDER BY w.FechaInicio DESC
+        """)
+        rows = cursor.fetchall()
+        winners = []
+        for r in rows:
+            winners.append({
+                "nombre": r.get("Nickname") or r["Nombre"],
+                "puntuacion": r["PuntuacionSemana"],
+                "fecha_inicio": r["FechaInicio"].isoformat() if r["FechaInicio"] else None,
+                "fecha_fin": r["FechaFin"].isoformat() if r["FechaFin"] else None,
+            })
+        return {"winners": winners}
+    finally:
+        conn.close()
+
+
+@app.get("/api/legends/avatar")
+async def legends_avatar(current_user: dict = Depends(get_current_user)):
+    """Avatar IA del usuario actual."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT * FROM HUB_UserAvatars WHERE IdUsuario = %s", (current_user["id"],))
+        row = cursor.fetchone()
+        if not row:
+            return {"generado": False}
+        return {
+            "generado": True,
+            "avatar": row["AvatarBase64"] or row.get("AvatarUrl"),
+            "nickname": row.get("Nickname"),
+            "prompt": row["PromptUsado"],
+            "fecha": row["FechaGenerado"].isoformat() if row["FechaGenerado"] else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/api/legends/weekly-winner")
+async def legends_weekly_winner(current_user: dict = Depends(get_current_user)):
+    """Ganador de la semana más reciente."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT TOP 1 w.*, u.Nombre, u.Nickname
+            FROM HUB_WeeklyWinners w
+            JOIN HUB_Users u ON w.IdUsuario = u.Id
+            ORDER BY w.FechaInicio DESC
+        """)
+        row = cursor.fetchone()
+        if not row:
+            return {"hay_ganador": False}
+        return {
+            "hay_ganador": True,
+            "nombre": row.get("Nickname") or row["Nombre"],
+            "puntuacion": row["PuntuacionSemana"],
+            "fecha_inicio": row["FechaInicio"].isoformat() if row["FechaInicio"] else None,
+            "fecha_fin": row["FechaFin"].isoformat() if row["FechaFin"] else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/legends/award")
+async def legends_award(payload: dict, current_user: dict = Depends(get_current_user)):
+    """Registra una métrica para el usuario autenticado."""
+    metrica = payload.get("metrica", "")
+    referencia_id = payload.get("referencia_id")
+    if metrica not in LEGENDS_METRICAS:
+        return {"error": f"Metrica '{metrica}' no reconocida. Disponibles: {list(LEGENDS_METRICAS.keys())}"}
+    legends_registrar_metrica(current_user["id"], metrica, referencia_id)
+    return {"ok": True, "metrica": metrica, "puntos": LEGENDS_METRICAS[metrica]}
+
+
+@app.get("/api/legends/celebrations")
+async def legends_celebrations(current_user: dict = Depends(get_current_user)):
+    """Cumpleaños y aniversarios del mes actual, combinados."""
+    import datetime as _dt
+    mes_actual = _dt.datetime.now().month
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT u.Nombre,
+                CASE
+                    WHEN u.FechaNacimiento IS NOT NULL THEN DAY(u.FechaNacimiento)
+                    WHEN u.CurpRfc IS NOT NULL AND LEN(u.CurpRfc) >= 10 THEN
+                        CAST(SUBSTRING(u.CurpRfc, 9, 2) AS INT)
+                    ELSE NULL
+                END AS dia,
+                CASE
+                    WHEN u.FechaNacimiento IS NOT NULL THEN MONTH(u.FechaNacimiento)
+                    WHEN u.CurpRfc IS NOT NULL AND LEN(u.CurpRfc) >= 10 THEN
+                        CAST(SUBSTRING(u.CurpRfc, 7, 2) AS INT)
+                    ELSE NULL
+                END AS mes,
+                CASE
+                    WHEN u.FechaNacimiento IS NOT NULL THEN
+                        YEAR(GETDATE()) - YEAR(u.FechaNacimiento)
+                    WHEN u.CurpRfc IS NOT NULL AND LEN(u.CurpRfc) >= 10 THEN
+                        CASE
+                            WHEN CAST(SUBSTRING(u.CurpRfc, 5, 2) AS INT) > 30
+                                THEN YEAR(GETDATE()) - (1900 + CAST(SUBSTRING(u.CurpRfc, 5, 2) AS INT))
+                            ELSE YEAR(GETDATE()) - (2000 + CAST(SUBSTRING(u.CurpRfc, 5, 2) AS INT))
+                        END
+                    ELSE NULL
+                END AS edad
+            FROM HUB_Users u
+            WHERE u.Activo = 1
+                AND (
+                    (u.FechaNacimiento IS NOT NULL AND MONTH(u.FechaNacimiento) = %s)
+                    OR (u.CurpRfc IS NOT NULL AND LEN(u.CurpRfc) >= 10
+                        AND CAST(SUBSTRING(u.CurpRfc, 7, 2) AS INT) = %s)
+                )
+            ORDER BY dia
+        """, (mes_actual, mes_actual))
+        cumpleanos = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT u.Nombre,
+                DAY(u.FechaIngreso) AS dia,
+                MONTH(u.FechaIngreso) AS mes,
+                YEAR(GETDATE()) - YEAR(u.FechaIngreso) AS anos
+            FROM HUB_Users u
+            WHERE u.Activo = 1
+                AND u.FechaIngreso IS NOT NULL
+                AND MONTH(u.FechaIngreso) = %s
+            ORDER BY dia
+        """, (mes_actual,))
+        aniversarios = cursor.fetchall()
+    finally:
+        conn.close()
+
+    month_names = {
+        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+        5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+    }
+    return {
+        "mes": month_names.get(mes_actual, ""),
+        "cumpleanos": cumpleanos,
+        "aniversarios": aniversarios,
+    }
+
+
+@app.get("/api/legends/metrics/config")
+async def legends_metrics_config():
+    """Configuración actual de métricas y puntos (pública dentro de la API)."""
+    return {
+        "nombre_puntos": "ECCSA Points",
+        "metricas": LEGENDS_METRICAS,
+        "niveles": {n: p for n, p in LEGENDS_NIVELES},
+        "iconos": LEGENDS_ICONO,
+    }
+
+
+@app.post("/api/legends/cron/weekly-calculate")
+async def legends_weekly_calculate():
+    """Calcula ganador de la semana anterior, guarda historial, resetea puntos semanales.
+    En producción lo ejecuta el worker legends_cron de Field (domingo 3 AM);
+    este endpoint permite el cálculo manual. Idempotente por FechaInicio/FechaFin."""
+    import pytz
+    from datetime import datetime, timedelta
+
+    mexico_tz = pytz.timezone("America/Mexico_City")
+    ahora = datetime.now(mexico_tz)
+    fin = ahora - timedelta(days=(ahora.weekday() + 1) % 7)
+    inicio = fin - timedelta(days=7)
+
+    print(f"[LEGENDS CRON] Calculando ganador: {inicio.date()} al {fin.date()}", flush=True)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(as_dict=True) as cur:
+            # Usuario con más puntos semanales
+            cur.execute("""
+                SELECT TOP 1 IdUsuario, PuntuacionSemanal
+                FROM HUB_UserScores
+                WHERE PuntuacionSemanal > 0
+                ORDER BY PuntuacionSemanal DESC
+            """)
+            winner = cur.fetchone()
+
+            if not winner:
+                print("[LEGENDS CRON] Sin actividad en la semana.", flush=True)
+                return {"ok": False, "detail": "Sin actividad"}
+
+            # Verificar si ya existe registro (idempotencia)
+            cur.execute(
+                "SELECT Id FROM HUB_WeeklyWinners WHERE FechaInicio = %s AND FechaFin = %s",
+                (inicio.date(), fin.date())
+            )
+            if cur.fetchone():
+                print("[LEGENDS CRON] Ya existe ganador para esta semana.", flush=True)
+                return {"ok": False, "detail": "Ya calculado"}
+
+            # Guardar ganador
+            cur.execute(
+                "INSERT INTO HUB_WeeklyWinners (IdUsuario, PuntuacionSemana, FechaInicio, FechaFin) VALUES (%s, %s, %s, %s)",
+                (winner["IdUsuario"], winner["PuntuacionSemanal"], inicio.date(), fin.date())
+            )
+
+            # Resetear puntos semanales de TODOS
+            cur.execute("UPDATE HUB_UserScores SET PuntuacionSemanal = 0")
+            conn.commit()
+
+            cur.execute("SELECT Nombre FROM HUB_Users WHERE Id = %s", (winner["IdUsuario"],))
+            u = cur.fetchone()
+            nombre = u["Nombre"] if u else "Desconocido"
+            print(f"[LEGENDS CRON] Ganador: {nombre} con {winner['PuntuacionSemanal']} ECCSA Points", flush=True)
+
+        # Notificar a todos (fuera del cursor; best-effort)
+        legends_notify_weekly_winner(winner["IdUsuario"], winner["PuntuacionSemanal"])
+
+        return {
+            "ok": True,
+            "ganador": nombre,
+            "puntos": winner["PuntuacionSemanal"],
+            "semana": f"{inicio.date()} al {fin.date()}",
+        }
+    finally:
+        conn.close()
+
+
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
 # El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque
 # (definido AL FINAL para no tapar las rutas de la API) sirve:
@@ -2849,7 +3612,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/", "ia"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}

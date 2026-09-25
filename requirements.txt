@@ -17,3 +17,4 @@ markupsafe==3.0.3
 
 webauthn==3.0.0
 pyjwt==2.9.0
+pytz==2024.2
