@@ -101,6 +101,7 @@ class UserInfo(BaseModel):
     acceso_reportes: bool = False
     acceso_registro_reportes: bool = False
     acceso_ia: bool = False
+    nickname: str = ""
 
 
 # --- Auth Dependency ---
@@ -114,7 +115,7 @@ def _user_from_token(token: str):
         email = parts[0]
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -122,6 +123,8 @@ def _user_from_token(token: str):
                 "id": row[0],
                 "nombre": row[1],
                 "email": row[2],
+                # Nickname de Legends: lo usa el Login para sugerir el nombre de la passkey
+                "nickname": (row[14] or "").strip() if len(row) > 14 and row[14] else "",
                 "acceso_inventario": row[3] == 1,
                 "acceso_nominas": row[4] == 1,
                 "acceso_cotizaciones": row[5] == 1,
@@ -222,7 +225,8 @@ def _build_login_response(email: str, row) -> dict:
     expires_at = (timestamp + 7 * 24 * 3600) * 1000  # 7 días en ms
     # row: Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas,
     #      AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo,
-    #      AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA
+    #      AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes,
+    #      AccesoIA, Nickname
     b = lambda i: (row[i] == 1) if len(row) > i and row[i] is not None else False
     user = {
         "id": row[0], "nombre": row[1], "email": row[2],
@@ -232,6 +236,8 @@ def _build_login_response(email: str, row) -> dict:
         "acceso_telegram": b(11), "acceso_usuarios": b(12),
         "acceso_reportes": b(13), "acceso_registro_reportes": b(14),
         "acceso_ia": b(15),
+        # Para la pantalla de sugerencia de passkey (label = nickname si existe)
+        "nickname": (row[16] or "").strip() if len(row) > 16 and row[16] else "",
     }
     return {"token": token, "user": user, "expiresAt": expires_at}
 
@@ -245,7 +251,7 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row and row[4] and row[3] == body.password:
@@ -2471,6 +2477,359 @@ async def ia_delete_conversacion(id_conversacion: int, current_user: dict = Depe
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# --- Passkeys (WebAuthn) — port desde Field -----------------------------------
+# Autenticación con huella / Face ID usando la tabla compartida HUB_Passkeys.
+# IMPORTANTE: desde este subdominio (admon.ecc-sa.com.mx) el navegador SOLO
+# permite passkeys con rpId = ecc-sa.com.mx (el rp raíz). Las passkeys legacy
+# (rpId field./hub.ecc-sa.com.mx) NO se pueden usar aquí: el navegador rechaza
+# cualquier rpId que no sea sufijo del dominio actual (SecurityError). Por eso
+# el registro SIEMPRE usa el rp nuevo y el login también.
+import base64 as _passkey_b64
+import time as _passkey_time
+from urllib.parse import urlparse as _urlparse
+
+import jwt as _pyjwt
+from webauthn import (
+    base64url_to_bytes,
+    generate_authentication_options,
+    generate_registration_options,
+    options_to_json,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers.structs import (
+    AuthenticatorAttachment,
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
+
+RP_ID = "ecc-sa.com.mx"  # rp raíz: funciona en cualquier subdominio (hub, field, admon)
+RP_NAME = "ECCSA"
+CHALLENGE_TTL = 5 * 60  # desafíos de 5 minutos
+
+_PASSKEY_SECRET_CACHE: Dict[str, str] = {}
+
+
+def _passkey_secret() -> str:
+    """Secreto para los JWT stateless de los challenges.
+    Orden: env JWT_SECRET > HUB_Config 'admon_passkey_secret' (se genera y
+    persiste la primera vez) > fallback temporal (solo si la BD no responde)."""
+    if _PASSKEY_SECRET_CACHE.get("secret"):
+        return _PASSKEY_SECRET_CACHE["secret"]
+    env = os.getenv("JWT_SECRET") or os.getenv("PASSKEY_JWT_SECRET")
+    if env:
+        _PASSKEY_SECRET_CACHE["secret"] = env
+        return env
+    secret = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT Valor FROM HUB_Config WHERE Clave = 'admon_passkey_secret'")
+        row = cursor.fetchone()
+        secret = (row.get("Valor") or "").strip() if row else ""
+        if not secret:
+            secret = _passkey_b64.urlsafe_b64encode(os.urandom(48)).decode("ascii").rstrip("=")
+            cursor.execute(
+                "UPDATE HUB_Config SET Valor = %s, Actualizado = GETDATE() WHERE Clave = 'admon_passkey_secret'",
+                (secret,),
+            )
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    "INSERT INTO HUB_Config (Clave, Valor) VALUES (%s, %s)",
+                    ("admon_passkey_secret", secret),
+                )
+        conn.close()
+    except Exception:
+        secret = "admon-passkey-boot-secret"  # inestable: solo si la BD falla
+    _PASSKEY_SECRET_CACHE["secret"] = secret
+    return secret
+
+
+def _is_allowed_origin(origin: str) -> bool:
+    """Allowlist: https://ecc-sa.com.mx o cualquier subdominio (*.ecc-sa.com.mx),
+    más localhost para desarrollo."""
+    if not origin:
+        return False
+    p = _urlparse(origin)
+    if p.hostname in ("localhost", "127.0.0.1"):
+        return True
+    if p.scheme != "https":
+        return False
+    host = p.hostname or ""
+    return host == "ecc-sa.com.mx" or host.endswith(".ecc-sa.com.mx")
+
+
+def _origin_for_request(request: Request) -> str:
+    """Origin real de la petición, validado contra la allowlist."""
+    origin = request.headers.get("origin", "") if request else ""
+    if not _is_allowed_origin(origin):
+        raise HTTPException(status_code=400, detail="Origin no permitido")
+    return origin
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return _passkey_b64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _issue_challenge(purpose: str):
+    """Challenge aleatorio envuelto en JWT stateless (seguro entre reinicios)."""
+    raw = os.urandom(32)
+    now = int(_passkey_time.time())
+    token = _pyjwt.encode(
+        {"purpose": purpose, "ch": _b64url_encode(raw), "iat": now, "exp": now + CHALLENGE_TTL},
+        _passkey_secret(),
+        algorithm="HS256",
+    )
+    return token, raw
+
+
+def _read_challenge(state: str, purpose: str) -> bytes:
+    try:
+        data = _pyjwt.decode(state, _passkey_secret(), algorithms=["HS256"])
+    except _pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="Desafío expirado, intenta de nuevo")
+    except _pyjwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Desafío inválido")
+    if data.get("purpose") != purpose or not data.get("ch"):
+        raise HTTPException(status_code=400, detail="Desafío inválido")
+    return base64url_to_bytes(data["ch"])
+
+
+def _login_row_by_id(user_id: int):
+    """Fila completa (misma forma que api_login) para armar la respuesta de sesión."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, "
+        "AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, "
+        "AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname "
+        "FROM HUB_Users WHERE Id = %s",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+
+# --- Modelos ---
+
+class PasskeyRegisterOptionsReq(BaseModel):
+    label: str = ""
+
+
+class PasskeyRegisterVerifyReq(BaseModel):
+    credential: dict
+    state: str
+    label: str = ""
+
+
+class PasskeyLoginOptionsReq(BaseModel):
+    rp: str = RP_ID  # el frontend siempre manda ecc-sa.com.mx (único rp válido aquí)
+
+
+class PasskeyLoginVerifyReq(BaseModel):
+    credential: dict
+    state: str
+
+
+@app.post("/api/passkeys/login/options")
+async def passkey_login_options(body: PasskeyLoginOptionsReq = None):
+    """Opciones de login discoverable (sin correo) para el rp raíz."""
+    try:
+        state, challenge = _issue_challenge("wk_login")
+        options = generate_authentication_options(rp_id=RP_ID, challenge=challenge)
+        return {"options": options_to_json(options), "state": state, "rp": RP_ID}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Passkey error: {str(e)}")
+
+
+@app.post("/api/passkeys/login/verify")
+async def passkey_login_verify(body: PasskeyLoginVerifyReq, request: Request = None):
+    """Valida el assertion y devuelve la sesión igual que /api/auth/login."""
+    challenge = _read_challenge(body.state, "wk_login")
+    origin = _origin_for_request(request)
+    cred_id = body.credential.get("id", "")
+    conn = get_connection()
+    cursor = conn.cursor(as_dict=True)
+    cursor.execute("SELECT * FROM HUB_Passkeys WHERE CredentialId = %s", (cred_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=401, detail="Passkey no reconocida en este equipo")
+    # Passkeys legacy (field./hub.) no se pueden usar desde admon: el navegador
+    # exige que el rpId coincida con el dominio actual.
+    cred_rp = (row.get("RpId") or RP_ID).strip() or RP_ID
+    if cred_rp != RP_ID:
+        raise HTTPException(
+            status_code=401,
+            detail="Tu passkey es de otra app (Field/HUB). Crea una aquí con ＋ Agregar este equipo.",
+        )
+    # El userHandle debe corresponder al dueño de la credencial
+    try:
+        raw_handle = body.credential.get("response", {}).get("userHandle")
+        handle_uid = int(base64url_to_bytes(raw_handle).decode("utf-8")) if raw_handle else row["IdUsuario"]
+    except Exception:
+        handle_uid = row["IdUsuario"]
+    if handle_uid != row["IdUsuario"]:
+        raise HTTPException(status_code=401, detail="Passkey no válida para este usuario")
+    try:
+        v = verify_authentication_response(
+            credential=body.credential,
+            expected_challenge=challenge,
+            expected_rp_id=RP_ID,
+            expected_origin=origin,
+            credential_public_key=_passkey_b64.urlsafe_b64decode(row["PublicKey"] + "=="),
+            credential_current_sign_count=row["SignCount"],
+            require_user_verification=False,
+        )
+    except Exception as e:
+        print(f"[passkey] login FAIL cred={cred_id[:12]}: {e}", flush=True)
+        raise HTTPException(status_code=401, detail="No se pudo verificar la passkey")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE HUB_Passkeys SET SignCount = %s, UltimoUso = GETDATE() WHERE Id = %s",
+            (v.new_sign_count, row["Id"]),
+        )
+        conn.close()
+    except Exception:
+        pass  # el sign count es anti-replay best effort; no bloquea el login
+    user_row = _login_row_by_id(row["IdUsuario"])
+    if not user_row or not user_row[4]:
+        raise HTTPException(status_code=401, detail="Usuario no válido o inactivo")
+    print(f"[passkey] login OK uid={user_row[0]}", flush=True)
+    return _build_login_response(user_row[2], user_row)
+
+
+@app.post("/api/passkeys/register/options")
+async def passkey_register_options(
+    body: PasskeyRegisterOptionsReq = None,
+    current_user: dict = Depends(get_current_user),
+    request: Request = None,
+):
+    """Options de registro (requiere sesión). Siempre en el rp raíz."""
+    origin = _origin_for_request(request)
+    conn = get_connection()
+    cursor = conn.cursor(as_dict=True)
+    cursor.execute(
+        "SELECT CredentialId FROM HUB_Passkeys WHERE IdUsuario = %s",
+        (current_user["id"],),
+    )
+    existing = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    exclude = []
+    for c in existing:
+        try:
+            exclude.append(PublicKeyCredentialDescriptor(id=base64url_to_bytes(c["CredentialId"])))
+        except Exception:
+            continue
+    state, challenge = _issue_challenge("wk_reg")
+    options = generate_registration_options(
+        rp_id=RP_ID,
+        rp_name=RP_NAME,
+        user_id=str(current_user["id"]).encode("utf-8"),
+        user_name=current_user["email"],
+        user_display_name=current_user["nombre"],
+        challenge=challenge,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            authenticator_attachment=AuthenticatorAttachment.PLATFORM,
+            resident_key=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.PREFERRED,
+        ),
+        exclude_credentials=exclude or None,
+    )
+    return {"options": options_to_json(options), "state": state}
+
+
+@app.post("/api/passkeys/register/verify")
+async def passkey_register_verify(
+    body: PasskeyRegisterVerifyReq,
+    current_user: dict = Depends(get_current_user),
+    request: Request = None,
+):
+    """Valida el attestation y guarda la passkey en HUB_Passkeys."""
+    challenge = _read_challenge(body.state, "wk_reg")
+    origin = _origin_for_request(request)
+    try:
+        v = verify_registration_response(
+            credential=body.credential,
+            expected_challenge=challenge,
+            expected_rp_id=RP_ID,
+            expected_origin=origin,
+        )
+    except Exception as e:
+        print(f"[passkey] register FAIL uid={current_user['id']}: {e}", flush=True)
+        raise HTTPException(status_code=400, detail="No se pudo registrar la passkey")
+    cred_id = _b64url_encode(v.credential_id)
+    pubkey = _b64url_encode(v.credential_public_key)
+    transports = ",".join(body.credential.get("transports", []) or [])
+    label = (body.label or "Mi equipo")[:100]
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT Id FROM HUB_Passkeys WHERE CredentialId = %s", (cred_id,))
+        if cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=400, detail="Esta passkey ya está registrada")
+        cursor.execute(
+            "INSERT INTO HUB_Passkeys (IdUsuario, CredentialId, PublicKey, SignCount, Transports, Etiqueta, RpId) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (current_user["id"], cred_id, pubkey, v.sign_count, transports, label, RP_ID),
+        )
+        # Nickname de Legends: inicializar SOLO si está vacío (no sobrescribir)
+        cursor.execute("SELECT Nickname FROM HUB_Users WHERE Id = %s", (current_user["id"],))
+        u = cursor.fetchone()
+        nick = (u.get("Nickname") or "").strip() if u else ""
+        if not nick:
+            cursor.execute("UPDATE HUB_Users SET Nickname = %s WHERE Id = %s", (label, current_user["id"]))
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al guardar la passkey: {str(e)}")
+    print(f"[passkey] register OK uid={current_user['id']} label={label}", flush=True)
+    return {"ok": True}
+
+
+@app.get("/api/passkeys/mine")
+async def passkey_mine(current_user: dict = Depends(get_current_user)):
+    """Passkeys del usuario con badge nueva/legacy para la UI."""
+    conn = get_connection()
+    cursor = conn.cursor(as_dict=True)
+    cursor.execute(
+        "SELECT Id, Etiqueta, FechaCreacion, UltimoUso, RpId FROM HUB_Passkeys "
+        "WHERE IdUsuario = %s ORDER BY FechaCreacion DESC",
+        (current_user["id"],),
+    )
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    for r in rows:
+        for k in ("FechaCreacion", "UltimoUso"):
+            if r.get(k) is not None:
+                r[k] = str(r[k])
+        rp = (r.get("RpId") or "").strip()
+        r["EsNueva"] = rp == RP_ID
+    return {"passkeys": rows}
+
+
+@app.delete("/api/passkeys/{pid}")
+async def passkey_delete(pid: int, current_user: dict = Depends(get_current_user)):
+    """Elimina una passkey propia."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM HUB_Passkeys WHERE Id = %s AND IdUsuario = %s", (pid, current_user["id"]))
+    deleted = cursor.rowcount
+    conn.close()
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Passkey no encontrada")
+    return {"ok": True}
 
 
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---

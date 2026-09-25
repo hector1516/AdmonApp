@@ -2,6 +2,12 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import { passkeySupported, registerPasskey, randomDeviceName } from '$lib/passkey.js';
+
+	// --- Passkeys (estilo Field) ---
+	let pkSupported = $state(false);
+	let myKeys = $state([]);
+	let pkBusy = $state(false);
 
 	// --- Cambiar contraseña ---
 	let actual = $state('');
@@ -65,6 +71,8 @@
 			navigate('/login', { replace: true });
 			return;
 		}
+		pkSupported = passkeySupported();
+		if (pkSupported) loadKeys();
 		try {
 			const raw = localStorage.getItem('admon_user');
 			const u = raw ? JSON.parse(raw) : null;
@@ -102,6 +110,57 @@
 			await deferredPrompt.userChoice.catch(() => {});
 			deferredPrompt = null;
 			canInstall = false;
+		}
+	}
+
+	// --- Passkeys: cargar / agregar / eliminar ---
+
+	async function loadKeys() {
+		try {
+			const res = await fetch('/api/passkeys/mine', { headers: auth.authHeader() });
+			if (res.ok) myKeys = (await res.json()).passkeys || [];
+		} catch {
+			/* sin passkeys visibles: se queda la lista vacía */
+		}
+	}
+
+	async function addKey() {
+		pkBusy = true;
+		try {
+			// Nombre de dispositivo = nickname del usuario si existe (coherencia con
+			// Legends); si no, uno aleatorio (ese nombre sembrará su Nickname).
+			let name = '';
+			try {
+				const u = JSON.parse(localStorage.getItem('admon_user') || 'null');
+				name = (u?.nickname || '').trim();
+			} catch {
+				name = '';
+			}
+			if (!name) {
+				name = randomDeviceName();
+				let i = 2;
+				while (myKeys.some((k) => k.Etiqueta === name)) name = `${randomDeviceName()} ${i++}`;
+			}
+			await registerPasskey(name);
+			await loadKeys();
+		} catch (e) {
+			alert(e.message || 'No se pudo registrar la passkey.');
+		} finally {
+			pkBusy = false;
+		}
+	}
+
+	async function delKey(id, label) {
+		if (!confirm(`¿Eliminar la passkey "${label}"?`)) return;
+		try {
+			const res = await fetch(`/api/passkeys/${id}`, { method: 'DELETE', headers: auth.authHeader() });
+			if (!res.ok) {
+				const e = await res.json().catch(() => ({}));
+				throw new Error(e.detail || 'No se pudo eliminar.');
+			}
+			await loadKeys();
+		} catch (e) {
+			alert(e.message || 'No se pudo eliminar.');
 		}
 	}
 
@@ -223,6 +282,32 @@
 		</div>
 	{/if}
 
+	{#if pkSupported}
+		<div class="card">
+			<div class="card-title">🔐 Mis passkeys</div>
+			<p class="hint">Entra con huella o Face ID. Las nuevas funcionan en cualquier subdominio de ecc-sa.com.mx; las legacy solo en Field/HUB.</p>
+			{#if myKeys.length === 0}
+				<div class="empty-sm">Sin passkeys registradas</div>
+			{:else}
+				{#each myKeys as k (k.Id)}
+					<div class="pk-row">
+						<span>🔑 {k.Etiqueta}
+							{#if k.EsNueva}
+								<span class="pk-badge pk-ok">nueva</span>
+							{:else}
+								<span class="pk-badge pk-warn">legacy</span>
+							{/if}
+						</span>
+						<button class="btn btn-sm btn-danger" on:click={() => delKey(k.Id, k.Etiqueta)}>Eliminar</button>
+					</div>
+				{/each}
+			{/if}
+			<button class="btn btn-primary btn-block" style="margin-top:0.75rem" on:click={addKey} disabled={pkBusy}>
+				{pkBusy ? '...' : '＋ Agregar este equipo'}
+			</button>
+		</div>
+	{/if}
+
 	<div class="card">
 		<div class="card-title">🔑 Cambiar contraseña</div>
 		<div class="field">
@@ -274,6 +359,11 @@
 	.dev-row code { font-size: 0.68rem; color: var(--color-text-muted); word-break: break-all; font-family: monospace; }
 	.check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; margin-bottom: 0.5rem; cursor: pointer; }
 	.check input { width: 1.1rem; height: 1.1rem; }
+	.empty-sm { font-size: 0.85rem; color: var(--color-text-muted); padding: 0.4rem 0; }
+	.pk-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; padding: 0.4rem 0; border-top: 1px solid rgba(255,255,255,0.05); }
+	.pk-badge { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 6px; margin-left: 0.4rem; vertical-align: middle; text-transform: uppercase; }
+	.pk-ok { background: rgba(34,197,94,0.15); color: #22C55E; }
+	.pk-warn { background: rgba(245,158,11,0.15); color: #F59E0B; }
 	.userlist { max-height: 180px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
 	.card { margin-bottom: 0.75rem; }
 </style>

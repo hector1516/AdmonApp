@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 
 // Store de autenticación JWT simple.
 // - Guarda token + usuario en localStorage (7 días, como Field)
-// - Sin WebAuthn/passkeys
+// - Passkeys (WebAuthn): login con huella/Face ID vía lib/passkey.js → saveSession
 // - El backend valida el token contra HUB_Users en cada request
 function createAuthStore() {
   const { subscribe, set } = writable({
@@ -39,6 +39,15 @@ function createAuthStore() {
     }
   }
 
+  // Guarda la sesión devuelta por el backend: { token, user, expiresAt }.
+  // La usan el login por contraseña y el login/registro por passkey.
+  function saveSession(data) {
+    localStorage.setItem('admon_token', data.token);
+    localStorage.setItem('admon_expires', String(data.expiresAt));
+    localStorage.setItem('admon_user', JSON.stringify(data.user));
+    set({ token: data.token, user: data.user, expiresAt: data.expiresAt });
+  }
+
   // Login contra POST /api/auth/login -> { token, user, expiresAt }
   async function login(email, password) {
     const res = await fetch('/api/auth/login', {
@@ -57,10 +66,7 @@ function createAuthStore() {
       throw new Error(msg);
     }
     const data = await res.json();
-    localStorage.setItem('admon_token', data.token);
-    localStorage.setItem('admon_expires', String(data.expiresAt));
-    localStorage.setItem('admon_user', JSON.stringify(data.user));
-    set({ token: data.token, user: data.user, expiresAt: data.expiresAt });
+    saveSession(data);
   }
 
   function logout() {
@@ -75,7 +81,7 @@ function createAuthStore() {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
-  return { subscribe, init, login, logout, getToken, isLoggedIn, authHeader };
+  return { subscribe, init, login, logout, getToken, isLoggedIn, authHeader, saveSession };
 }
 
 export const auth = createAuthStore();

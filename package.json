@@ -9,6 +9,7 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
     "dexie": "^4.4.6",
     "svelte": "^5.0.0"
   },
