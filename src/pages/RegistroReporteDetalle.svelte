@@ -162,8 +162,8 @@
 		}
 	}
 
-	function abrirPreview() {
-		if (!pdfBlob) return;
+	async function abrirPreview() {
+		if (!(await loadPdfBlob())) return;
 		showPdfPreview = true;
 	}
 
@@ -510,25 +510,35 @@
 
 		<!-- Acciones -->
 		<div class="card">
-			<div class="grid-3">
-				<button class="btn btn-primary btn-block" on:click={descargarPDF} disabled={pdfLoading}>
+			<div class="grid-2" style="gap: 0.5rem;">
+				<button class="btn btn-primary" on:click={descargarPDF} disabled={pdfLoading} style="flex: 1;">
 					{pdfLoading ? '⏳ Cargando…' : '📥 Descargar PDF'}
 				</button>
-				<button class="btn btn-secondary btn-block" on:click={compartirPDF} disabled={pdfLoading}>
-					📤 Compartir
-				</button>
-				<button class="btn btn-info btn-block" on:click={abrirPreview} disabled={pdfLoading || !pdfBlob}>
+				<button class="btn btn-info" on:click={abrirPreview} disabled={pdfLoading} style="flex: 1;">
 					👁️ Previsualizar
 				</button>
 			</div>
-			<div class="grid-2" style="margin-top: 0.5rem;">
+			<div class="grid-2" style="margin-top: 0.5rem; gap: 0.5rem;">
+				<button class="btn btn-secondary" on:click={compartirPDF} disabled={pdfLoading} style="flex: 1;">
+					📤 Compartir
+				</button>
 				{#if reporte.Eliminado === 1 || reporte.Eliminado === true}
-					<button class="btn btn-success btn-block" on:click={restaurar} disabled={busy}>♻️ Restaurar</button>
-					<button class="btn btn-danger btn-block" on:click={eliminarDefinitivo} disabled={busy}>💀 Eliminar definitivamente</button>
+					<button class="btn btn-success" on:click={restaurar} disabled={busy} style="flex: 1;">
+						♻️ Restaurar
+					</button>
 				{:else}
-					<button class="btn btn-danger btn-block" on:click={moverAPapelera} disabled={busy}>🗑️ Mover a papelera</button>
+					<button class="btn btn-danger" on:click={moverAPapelera} disabled={busy} style="flex: 1;">
+						🗑️ Mover a papelera
+					</button>
 				{/if}
 			</div>
+			{#if reporte.Eliminado === 1 || reporte.Eliminado === true}
+				<div class="grid-1" style="margin-top: 0.5rem;">
+					<button class="btn btn-danger" on:click={eliminarDefinitivo} disabled={busy} style="width: 100%;">
+						💀 Eliminar definitivamente
+					</button>
+				</div>
+			{/if}
 		</div>
 
 		<!-- PDF Preview Modal -->
