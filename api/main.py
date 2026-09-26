@@ -430,6 +430,25 @@ async def get_users(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+@app.get("/api/usuarios")
+async def api_list_usuarios(current_user: dict = Depends(get_current_user)):
+    """Catálogo ligero {Id, Nombre, Activo} de HUB_Users para los selects de
+    técnicos en el detalle/edición de reportes (la página pide /api/usuarios;
+    antes no existía y el select quedaba siempre vacío). Mismo permiso que
+    los reportes. El prefetch offline también lo cachea."""
+    _require_reporte(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Id, Nombre, Activo FROM HUB_Users ORDER BY Nombre")
+        rows = cursor.fetchall()
+        conn.close()
+        # Activo como entero 1/0: el frontend filtra con `Activo === 1`
+        return [{"Id": r[0], "Nombre": r[1], "Activo": 1 if r[2] else 0} for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 # --- Detalle / edición de usuario (espejo del Administrador de Usuarios del HUB) ---
 
 # Columnas de HUB_Users administrables (mismo orden que get_all_hub_users del HUB)
