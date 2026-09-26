@@ -22,14 +22,7 @@
 		}
 	}
 
-	function token() {
-		return localStorage.getItem('admon_token') || '';
-	}
-
-	// Las imágenes requieren auth: se manda ?token= (mismo patrón que los PDFs)
-	function imgUrl(t, w) {
-		return `/api/tickets-oxxogas/${t.id}/imagen?w=${w}&token=${encodeURIComponent(token())}`;
-	}
+	// Las imágenes solo se muestran en la página de detalle (/tickets_oxxogas/:id).
 
 	function fmtFecha(iso) {
 		if (!iso) return '—';
@@ -103,13 +96,6 @@
 		<div class="grid">
 			{#each filtrados as t (t.id)}
 				<button class="card-ticket" onclick={() => navigate(`/tickets_oxxogas/${t.id}`)} title="Ver detalle completo">
-					<div class="thumb">
-						{#if t.tiene_foto}
-							<img src={imgUrl(t, 400)} alt="Ticket {t.folio}" loading="lazy" decoding="async" />
-						{:else}
-							<div class="no-photo">🎫<span>Sin foto</span></div>
-						{/if}
-					</div>
 					<div class="body">
 						<div class="folio">#{t.folio}</div>
 						<div class="fecha">🕐 {fmtFecha(t.fecha)}</div>
@@ -151,10 +137,6 @@
 
 	.card-ticket { text-align: left; background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px; overflow: hidden; padding: 0; cursor: pointer; transition: transform 0.15s, border-color 0.15s; color: inherit; font: inherit; }
 	.card-ticket:hover { transform: translateY(-3px); border-color: rgba(255, 107, 0, 0.5); }
-	.thumb { aspect-ratio: 4 / 3; background: #0f172a; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-	.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-	.no-photo { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; color: #475569; font-size: 2rem; }
-	.no-photo span { font-size: 0.7rem; }
 
 	.body { padding: 0.75rem 0.85rem 0.9rem; }
 	.folio { font-family: ui-monospace, 'Cascadia Mono', monospace; font-weight: 800; font-size: 1.05rem; color: #FFAE00; letter-spacing: 0.5px; }
