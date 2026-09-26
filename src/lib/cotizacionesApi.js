@@ -161,7 +161,7 @@ export async function crear({ id_cliente, contacto, descripcion }) {
 		throw new Error('Cliente, contacto y descripción son obligatorios.');
 	}
 	const payload = {
-		id_cliente: id_cliente.strip().upper(),
+		id_cliente: id_cliente.trim().toUpperCase(),
 		contacto: contacto.trim(),
 		descripcion: descripcion.trim()
 	};
@@ -387,7 +387,7 @@ export async function clientes() {
 }
 
 export async function clienteNombre(idCliente) {
-	const idc = (idCliente || '').strip().upper();
+	const idc = (idCliente || '').trim().toUpperCase();
 	if (!idc) return null;
 	if (isOnline()) {
 		try {
@@ -402,7 +402,7 @@ export async function clienteNombre(idCliente) {
 }
 
 export async function clienteContactos(idCliente) {
-	const idc = (idCliente || '').strip().upper();
+	const idc = (idCliente || '').trim().toUpperCase();
 	if (!idc || !isOnline()) return [];
 	try {
 		return await req('GET', `/api/clientes/${idc}/contactos`);

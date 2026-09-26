@@ -88,7 +88,7 @@
 		try {
 			const raw = localStorage.getItem('admon_user');
 			const u = raw ? JSON.parse(raw) : null;
-			return (u && u.email ? String(u.email) : '').strip().toLowerCase();
+			return (u && u.email ? String(u.email) : '').trim().toLowerCase();
 		} catch {
 			return '';
 		}
@@ -116,7 +116,7 @@
 				const a = {};
 				for (const g of Object.values(PERM_GROUPS)) for (const [k] of g) a[k] = !!d[k];
 				accesos = a;
-				isSelf = (email || '').strip().toLowerCase() === myEmail();
+				isSelf = (email || '').trim().toLowerCase() === myEmail();
 			} else if (res.status === 401 || res.status === 403) {
 				auth.logout();
 				navigate('/login', { replace: true });
