@@ -36,6 +36,10 @@ const MODULES = [
 	// (folio, factura, estación, cliente, vehículo…); solo falta la imagen,
 	// que se muestra con fallback si no hay red.
 	{ list: '/tickets-oxxogas' },
+	// 💰 Saldo Go Vale: valor del último sync del worker del HUB; se precacha
+	// para que la tarjeta muestre el último saldo conocido sin red y se
+	// refresque al volver la conexión (mismo ciclo que el resto de módulos).
+	{ list: '/tickets-oxxogas/saldo' },
 	// 🤖 ECCSA IA: conversaciones (máx 10 por usuario) + sus mensajes
 	{
 		list: '/ia/conversaciones',

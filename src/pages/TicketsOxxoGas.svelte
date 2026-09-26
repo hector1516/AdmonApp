@@ -102,17 +102,14 @@
 	{#if saldo !== null}
 		{@const bajo = saldo < UMBRAL_SALDO}
 		<div class="saldo-card" class:bajo>
-			<div class="saldo-main">
-				<div class="saldo-label">💰 Saldo Go Vale</div>
-				<div class="saldo-num" class:rojo={bajo} class:verde={!bajo}>${fmtSaldo(saldo)}</div>
-				<div class="saldo-alerta" class:rojo={bajo} class:verde={!bajo}>
-					{bajo ? '⚠️ Saldo bajo — recarga pronto' : '✅ Saldo disponible para generar vales'}
-				</div>
+			<div class="saldo-label">💰 Saldo Go Vale</div>
+			<div class="saldo-num" class:rojo={bajo} class:verde={!bajo}>${fmtSaldo(saldo)}</div>
+			<div class="saldo-alerta" class:rojo={bajo} class:verde={!bajo}>
+				{bajo ? '⚠️ Saldo bajo — recarga pronto' : '✅ Saldo disponible para generar vales'}
 			</div>
-			<div class="saldo-side">
-				<div>🔄 Revisado:</div>
-				<div class="saldo-fecha">{saldoFecha}</div>
-				<div class="saldo-umbral">Umbral alerta: ${UMBRAL_SALDO.toLocaleString('es-MX')}</div>
+			<div class="saldo-meta">
+				<span>🔄 Revisado: {saldoFecha}</span>
+				<span>Umbral alerta: ${UMBRAL_SALDO.toLocaleString('es-MX')}</span>
 			</div>
 		</div>
 	{/if}
@@ -184,8 +181,10 @@
 	.chip.pend { color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.3); }
 	.row { font-size: 0.75rem; color: #cbd5e1; margin-top: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-	/* Saldo Go Vale — mismo look que la vista Vales OxxoGas del HUB */
-	.saldo-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-radius: 14px; padding: 18px 26px; margin: 0 0 14px; box-shadow: 0 4px 18px rgba(0,0,0,.35); background: linear-gradient(135deg, #052E16 0%, #022C22 100%); border: 2px solid #16A34A; }
+	/* Saldo Go Vale — mismo look que la vista Vales OxxoGas del HUB.
+	   Bloque apilado: etiqueta → monto → alerta → meta (revisado/umbral)
+	   al pie de la tarjeta, para que quede cuadrado con el texto principal. */
+	.saldo-card { border-radius: 14px; padding: 16px 24px; margin: 0 0 14px; box-shadow: 0 4px 18px rgba(0,0,0,.35); background: linear-gradient(135deg, #052E16 0%, #022C22 100%); border: 2px solid #16A34A; }
 	.saldo-card.bajo { background: linear-gradient(135deg, #7F1D1D 0%, #450A0A 100%); border-color: #EF4444; }
 	.saldo-label { color: #94a3b8; font-size: .85rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 	.saldo-num { font-size: 2.4rem; font-weight: 800; line-height: 1.15; margin-top: 2px; color: #DCFCE7; }
@@ -193,7 +192,5 @@
 	.saldo-num.verde { color: #22C55E; }
 	.saldo-alerta { font-size: .95rem; font-weight: 600; margin-top: 2px; color: #FEE2E2; }
 	.saldo-alerta.verde { color: #DCFCE7; }
-	.saldo-side { text-align: right; color: #94a3b8; font-size: .8rem; min-width: 160px; }
-	.saldo-fecha { color: #CBD5E1; font-weight: 600; }
-	.saldo-umbral { margin-top: 8px; font-size: .75rem; }
+	.saldo-meta { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.12); color: #94a3b8; font-size: .78rem; }
 </style>
