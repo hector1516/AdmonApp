@@ -102,6 +102,7 @@ class UserInfo(BaseModel):
     acceso_reportes: bool = False
     acceso_registro_reportes: bool = False
     acceso_ia: bool = False
+    acceso_vales_oxxogas: bool = False
     nickname: str = ""
 
 
@@ -116,7 +117,7 @@ def _user_from_token(token: str):
         email = parts[0]
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, AccesoValesOxxoGas FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -137,6 +138,7 @@ def _user_from_token(token: str):
                 "acceso_reportes": row[11] == 1,
                 "acceso_registro_reportes": row[12] == 1,
                 "acceso_ia": row[13] == 1,
+                "acceso_vales_oxxogas": row[15] == 1 if len(row) > 15 else False,
             }
         return None
     except Exception as e:
@@ -227,7 +229,7 @@ def _build_login_response(email: str, row) -> dict:
     # row: Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas,
     #      AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo,
     #      AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes,
-    #      AccesoIA, Nickname
+    #      AccesoIA, Nickname, AccesoValesOxxoGas
     b = lambda i: (row[i] == 1) if len(row) > i and row[i] is not None else False
     user = {
         "id": row[0], "nombre": row[1], "email": row[2],
@@ -237,6 +239,7 @@ def _build_login_response(email: str, row) -> dict:
         "acceso_telegram": b(11), "acceso_usuarios": b(12),
         "acceso_reportes": b(13), "acceso_registro_reportes": b(14),
         "acceso_ia": b(15),
+        "acceso_vales_oxxogas": b(17),
         # Para la pantalla de sugerencia de passkey (label = nickname si existe)
         "nickname": (row[16] or "").strip() if len(row) > 16 and row[16] else "",
     }
@@ -252,7 +255,7 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, AccesoValesOxxoGas FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row and row[4] and row[3] == body.password:
@@ -2667,7 +2670,8 @@ def _login_row_by_id(user_id: int):
     cursor.execute(
         "SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, "
         "AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, "
-        "AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname "
+        "AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, "
+        "AccesoValesOxxoGas "
         "FROM HUB_Users WHERE Id = %s",
         (user_id,),
     )
@@ -3660,6 +3664,116 @@ async def legends_weekly_calculate():
         conn.close()
 
 
+# ============================================================================
+# --- Tickets de OxxoGas (solo lectura) --------------------------------------
+# Muestra los tickets físicos capturados en Field/HUB (tabla HUB_OxxoGasTickets)
+# con su factura CFDI enlazada (HUB_OxxoGasVales) y la estación capturada.
+# Identificador principal: FolioTicket (folio del ticket impreso).
+# Orden: por FechaRegistro descendente (el más reciente arriba).
+# Sin factura o sin estación → null; el frontend muestra "Pendiente".
+# ============================================================================
+
+def _require_vales_oxxogas(current_user: dict):
+    """Gate del módulo: mismo permiso que 'Vales OxxoGas' en el HUB."""
+    if not current_user.get("acceso_vales_oxxogas"):
+        raise HTTPException(status_code=403, detail="No access")
+
+
+@app.get("/api/tickets-oxxogas")
+async def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
+    """Índice de tickets de OxxoGas con la relación factura ↔ estación.
+    OUTER APPLY con TOP 1 + LIKE sobre el XML: el folio del ticket vive dentro
+    del CFDI (NoIdentificacion), por eso la igualdad directa nunca matchea."""
+    _require_vales_oxxogas(current_user)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT TOP 300
+                T.Id, T.FolioTicket, T.FechaRegistro, T.Estacion, T.Descripcion,
+                CASE WHEN T.ImagenTicket IS NOT NULL THEN 1 ELSE 0 END AS TieneFoto,
+                C.Cliente, A.MarcaModelo, A.Placas, U.Nombre AS Capturo,
+                F.XmlFolio AS Factura, F.Monto, F.XmlLitros, F.XmlConcepto
+            FROM HUB_OxxoGasTickets T
+            LEFT JOIN clientes C ON C.IdCliente = T.IdCliente
+            LEFT JOIN HUB_Automoviles A ON A.Id = T.IdVehiculo
+            LEFT JOIN HUB_Users U ON U.Id = T.IdUsuario
+            OUTER APPLY (
+                SELECT TOP 1 V2.XmlFolio, V2.Monto, V2.XmlLitros, V2.XmlConcepto
+                FROM HUB_OxxoGasVales V2
+                WHERE V2.XmlFolio = T.FolioTicket
+                   OR V2.XmlContent LIKE '%' + T.FolioTicket + '%'
+                ORDER BY V2.Fecha DESC
+            ) F
+            ORDER BY T.FechaRegistro DESC
+        """)
+        rows = cursor.fetchall()
+        resultado = []
+        for r in rows:
+            estacion = (r["Estacion"] or "").strip()
+            resultado.append({
+                "id": r["Id"],
+                "folio": (r["FolioTicket"] or "").strip(),
+                "fecha": r["FechaRegistro"].isoformat() if r["FechaRegistro"] else None,
+                "estacion": estacion or None,          # null → front muestra "Pendiente"
+                "descripcion": r["Descripcion"] or "",
+                "tiene_foto": bool(r["TieneFoto"]),
+                "cliente": r["Cliente"],
+                "marca_modelo": r["MarcaModelo"],
+                "placas": r["Placas"],
+                "capturo": r["Capturo"],
+                "factura": r["Factura"] or None,        # null → front muestra "Pendiente"
+                "monto": float(r["Monto"]) if r["Monto"] is not None else None,
+                "litros": float(r["XmlLitros"]) if r["XmlLitros"] is not None else None,
+                "concepto": r["XmlConcepto"],
+            })
+        return resultado
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.get("/api/tickets-oxxogas/{ticket_id:int}/imagen")
+async def tickets_oxxogas_imagen(ticket_id: int, w: int = 0,
+                                 current_user: dict = Depends(_user_from_header_or_query)):
+    """JPEG del ticket. Acepta ?token= en query para poder usarse en <img>
+    (auth vía _user_from_header_or_query, igual que los PDFs). w>0 = thumbnail.
+    Algunos tickets sincronizados desde Field traen 15 bytes de basura antes del
+    JPEG (bug de data-URL en field/api sync) → se recorta desde el SOI (FF D8 FF)."""
+    _require_vales_oxxogas(current_user)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ImagenTicket FROM HUB_OxxoGasTickets WHERE Id = %s", (int(ticket_id),))
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            raise HTTPException(status_code=404, detail="El ticket no tiene imagen")
+        data = bytes(row[0])
+        idx = data.find(b"\xff\xd8\xff")
+        if idx < 0:
+            raise HTTPException(status_code=415, detail="Imagen inválida")
+        if idx > 0:
+            data = data[idx:]
+        if w and w > 0:
+            try:
+                import io as _io
+                from PIL import Image
+                img = Image.open(_io.BytesIO(data))
+                img.thumbnail((int(w), int(w)))
+                buf = _io.BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=75, optimize=True)
+                data = buf.getvalue()
+            except Exception:
+                pass  # si falla el resize servimos el original
+        return Response(
+            content=data, media_type="image/jpeg",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+    finally:
+        conn.close()
+
+
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
 # El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque
 # (definido AL FINAL para no tapar las rutas de la API) sirve:
@@ -3677,7 +3791,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}

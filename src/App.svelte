@@ -27,6 +27,7 @@
 	import Telegram from './pages/Telegram.svelte';
 	import Config from './pages/Config.svelte';
 	import Legends from './pages/Legends.svelte';
+	import TicketsOxxoGas from './pages/TicketsOxxoGas.svelte';
 
 	let ready = $state(false);
 	let splashDone = $state(false);
@@ -125,6 +126,8 @@
 				<Config />
 			{:else if $path === '/legends'}
 				<Legends />
+			{:else if $path === '/tickets_oxxogas'}
+				<TicketsOxxoGas />
 		{:else}
 			<Dashboard />
 		{/if}
