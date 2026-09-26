@@ -3,6 +3,8 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { clientes } from '$lib/cotizacionesApi.js';
+	import { api } from '$lib/api.js';
+	import OfflineNotice from '../components/OfflineNotice.svelte';
 
 	// Detalle de cliente como el HUB + administración de sus contactos.
 	// Los contactos se muestran con su origen: catálogo (HUB_ContactosClientes,
@@ -38,15 +40,13 @@
 
 	async function cargarContactos() {
 		try {
-			const res = await fetch(`/api/clientes/${idCliente}/contactos/detalle`, {
-				headers: auth.authHeader()
-			});
-			const data = await res.json().catch(() => []);
-			if (!res.ok) throw new Error(data.detail || 'Error al cargar contactos.');
-			contactos = Array.isArray(data) ? data : [];
+			// api.get: red -> IndexedDB -> copia local. El prefetch de arranque
+			// guarda '/clientes/{id}/contactos/detalle' de los 10 primeros
+			// clientes, así que sin red se listan los ya consultados.
+			contactos = (await api.get(`/clientes/${idCliente}/contactos/detalle`)) || [];
 		} catch (e) {
 			if (String(e.message || '').includes('Sesión expirada')) throw e;
-			// offline / error: lista vacía (consistente con el resto del módulo)
+			// offline sin copia: lista vacía (consistente con el resto del módulo)
 			contactos = [];
 		}
 	}
@@ -196,6 +196,7 @@
 	{#if loading}
 		<div class="empty">Cargando…</div>
 	{:else}
+		<OfflineNotice compacto />
 		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">✏️ Datos del cliente</div>
 			<div class="field">

@@ -3,10 +3,11 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { clientes } from '$lib/cotizacionesApi.js';
-	import { online } from '$lib/stores/online.js';
+	import OfflineNotice from '../components/OfflineNotice.svelte';
 
 	// Catálogo de clientes como el HUB: buscar, editar, eliminar y registrar.
-	// Catálogo maestro: requiere conexión (los cambios aplican directo).
+	// La lista se lee de Dexie (cotizacionesApi) así que abre sin conexión;
+	// los cambios (alta/edición/borrado) sí requieren conexión.
 
 	let lista = $state([]);
 	let loading = $state(true);
@@ -185,11 +186,7 @@
 		<input class="input" placeholder="🔍 Buscar por ID o razón social…" bind:value={busqueda} />
 	</div>
 
-	{#if !$online}
-		<div class="card" style="margin-bottom: 0.75rem; border-color: rgba(239,68,68,0.4);">
-			<p style="margin: 0; font-size: 0.85rem;">🔴 Catálogo maestro: requiere conexión.</p>
-		</div>
-	{/if}
+	<OfflineNotice />
 
 	{#if mostrandoNuevo}
 		<div class="card" style="margin-bottom: 0.75rem; border-color: rgba(255,107,0,0.35);">

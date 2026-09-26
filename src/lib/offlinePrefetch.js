@@ -22,9 +22,14 @@ const MODULES = [
 	{ list: '/users', details: (l) => (l || []).slice(0, LIMIT).map((u) => `/users/${u.id}`) },
 	// 📇 Clientes: la lista ya vive en Dexie (cotizacionesApi); aquí los
 	// contactos de los 10 primeros, que ClienteDetalle necesita offline.
-	{ list: '/clientes', details: (l) => (l || []).slice(0, LIMIT).map((c) => `/clientes/${c.id_cliente}/contactos`) },
+	// La llave debe ser /contactos/detalle (es la que pide la página: trae
+	// contacto + en_catalogo + n_cotizaciones), NO /contactos pelado.
+	{ list: '/clientes', details: (l) => (l || []).slice(0, LIMIT).map((c) => `/clientes/${c.id_cliente}/contactos/detalle`) },
 	// 📋 Reportes: lista por defecto (misma llave `?` que arma la página,
 	// recientes primero) + detalle y técnicos de los 10 primeros.
+	// Las FOTOS no se prefetchan (base64, MBs): se cachean solas la primera
+	// vez que el usuario abre el detalle (vía api.get), así que un reporte ya
+	// visto sí muestra sus fotos sin red.
 	{
 		list: '/reportes?',
 		details: (l) =>

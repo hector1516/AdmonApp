@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { online } from '$lib/stores/online.js';
 	import { api } from '$lib/api.js';
+	import OfflineNotice from '../components/OfflineNotice.svelte';
 
 	// Detalle completo de reporte (pantalla completa, sin modales)
 	// Permiso: acceso_registro_reportes
@@ -374,6 +374,7 @@
 	{#if loading}
 		<div class="empty">Cargando…</div>
 	{:else}
+		<OfflineNotice compacto />
 		{#if error}
 			<div class="msg err">{error}</div>
 		{/if}

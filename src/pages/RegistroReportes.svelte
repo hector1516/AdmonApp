@@ -2,8 +2,8 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { online } from '$lib/stores/online.js';
 	import { api } from '$lib/api.js';
+	import OfflineNotice from '../components/OfflineNotice.svelte';
 
 	// REGISTRO DE REPORTES (Admin) — clon del HUB views/registro_reportes.py
 	// Lista global con pestañas: Firmados / Papelera (eliminados)
@@ -175,11 +175,7 @@
 
 	<input class="input" placeholder="Buscar por cliente, folio, técnico, contacto, cotización…" bind:value={busqueda} style="margin-bottom: 0.75rem;" />
 
-	{#if !$online}
-		<div class="card" style="margin-bottom: 0.75rem; border-color: rgba(239,68,68,0.4);">
-			<p style="margin: 0; font-size: 0.85rem;">🔴 Lista maestra: requiere conexión.</p>
-		</div>
-	{/if}
+	<OfflineNotice />
 
 	<!-- Tabs -->
 	<div class="tabs" style="margin-bottom: 0.75rem; display: flex; gap: 0.25rem; border-bottom: 1px solid var(--color-border);">
