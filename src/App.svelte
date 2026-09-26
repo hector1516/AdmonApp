@@ -28,6 +28,7 @@
 	import Config from './pages/Config.svelte';
 	import Legends from './pages/Legends.svelte';
 	import TicketsOxxoGas from './pages/TicketsOxxoGas.svelte';
+	import TicketOxxoGasDetalle from './pages/TicketOxxoGasDetalle.svelte';
 
 	let ready = $state(false);
 	let splashDone = $state(false);
@@ -128,6 +129,8 @@
 				<Legends />
 			{:else if $path === '/tickets_oxxogas'}
 				<TicketsOxxoGas />
+			{:else if $path.startsWith('/tickets_oxxogas/')}
+				<TicketOxxoGasDetalle id={$path.split('/')[2]} />
 		{:else}
 			<Dashboard />
 		{/if}
