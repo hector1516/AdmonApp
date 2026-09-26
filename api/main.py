@@ -99,7 +99,6 @@ class UserInfo(BaseModel):
     acceso_proveedores: bool = False
     acceso_oc: bool = False
     acceso_calculo: bool = False
-    acceso_telegram: bool = False
     acceso_usuarios: bool = False
     acceso_reportes: bool = False
     acceso_registro_reportes: bool = False
@@ -135,7 +134,6 @@ def _user_from_token(token: str):
                 "acceso_proveedores": row[6] == 1,
                 "acceso_oc": row[7] == 1,
                 "acceso_calculo": row[8] == 1,
-                "acceso_telegram": row[9] == 1,
                 "acceso_usuarios": row[10] == 1,
                 "acceso_reportes": row[11] == 1,
                 "acceso_registro_reportes": row[12] == 1,
@@ -238,7 +236,9 @@ def _build_login_response(email: str, row) -> dict:
         "acceso_inventario": b(5), "acceso_nominas": b(6),
         "acceso_cotizaciones": b(7), "acceso_proveedores": b(8),
         "acceso_oc": b(9), "acceso_calculo": b(10),
-        "acceso_telegram": b(11), "acceso_usuarios": b(12),
+        # b(11) = AccesoTelegram: se lee en el SELECT pero ya NO se expone
+        # (módulo Telegram eliminado de admon); acceso_usuarios sigue en b(12).
+        "acceso_usuarios": b(12),
         "acceso_reportes": b(13), "acceso_registro_reportes": b(14),
         "acceso_ia": b(15),
         "acceso_vales_oxxogas": b(17),
@@ -424,7 +424,6 @@ async def get_users(current_user: dict = Depends(get_current_user)):
                 acceso_proveedores=row[6] == 1,
                 acceso_oc=row[7] == 1,
                 acceso_calculo=row[8] == 1,
-                acceso_telegram=row[9] == 1,
                 acceso_usuarios=row[10] == 1,
             ))
         return result
@@ -461,7 +460,7 @@ _USER_COLS = (
     "AccesoAutomoviles, AccesoVacaciones, AccesoConfigurarCorreo, AccesoConfigAI, "
     "Notificaciones, AccesoMisVacaciones, AccesoHorasExtras, AccesoMisHorasExtras, AccesoOxxoGas, "
     "AccesoValesOxxoGas, AccesoRegistroTicketOxxoGas, AccesoEdicionBD, AccesoNominas, AccesoInventario, "
-    "AccesoCalculo, AccesoProveedores, AccesoOC, AccesoTelegram, AccesoAppConfig, AccesoSolicitarVales, "
+    "AccesoCalculo, AccesoProveedores, AccesoOC, AccesoAppConfig, AccesoSolicitarVales, "
     "AccesoAdminVales, AccesoConfigOxxogas, AccesoDeteccionRed, AccesoPdfConfig"
 )
 # Orden propio (cada columna UNA vez): _user_row_to_dict usa índices fijos
@@ -487,7 +486,7 @@ def _user_row_to_dict(row) -> dict:
         "AccesoAutomoviles", "AccesoVacaciones", "AccesoConfigurarCorreo", "AccesoConfigAI",
         "Notificaciones", "AccesoMisVacaciones", "AccesoHorasExtras", "AccesoMisHorasExtras", "AccesoOxxoGas",
         "AccesoValesOxxoGas", "AccesoRegistroTicketOxxoGas", "AccesoEdicionBD", "AccesoNominas", "AccesoInventario",
-        "AccesoCalculo", "AccesoProveedores", "AccesoOC", "AccesoTelegram", "AccesoAppConfig",
+        "AccesoCalculo", "AccesoProveedores", "AccesoOC", "AccesoAppConfig",
         "AccesoSolicitarVales", "AccesoAdminVales", "AccesoConfigOxxogas", "AccesoDeteccionRed", "AccesoPdfConfig",
     ]
     for i, k in enumerate(keys):
@@ -545,7 +544,7 @@ async def update_user_detail(user_id: int, body: UserUpdateRequest, current_user
             "AccesoAutomoviles", "AccesoVacaciones", "AccesoConfigurarCorreo", "AccesoConfigAI",
             "Notificaciones", "AccesoMisVacaciones", "AccesoHorasExtras", "AccesoMisHorasExtras", "AccesoOxxoGas",
             "AccesoValesOxxoGas", "AccesoRegistroTicketOxxoGas", "AccesoEdicionBD", "AccesoNominas", "AccesoInventario",
-            "AccesoCalculo", "AccesoProveedores", "AccesoOC", "AccesoTelegram", "AccesoAppConfig",
+            "AccesoCalculo", "AccesoProveedores", "AccesoOC", "AccesoAppConfig",
             "AccesoSolicitarVales", "AccesoAdminVales", "AccesoConfigOxxogas", "AccesoDeteccionRed", "AccesoPdfConfig",
         ]
         for k in allowed:
@@ -1664,19 +1663,126 @@ async def cliente_contacto_rename(id_cliente: str, body: ContactoRename, current
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.get("/api/clientes/{id_cliente}/contactos")
-async def cliente_contactos(id_cliente: str, current_user: dict = Depends(get_current_user)):
+class ContactoBorrar(BaseModel):
+    contacto: str = ""
+
+
+@app.delete("/api/clientes/{id_cliente}/contactos")
+async def cliente_contacto_delete(id_cliente: str, body: ContactoBorrar, current_user: dict = Depends(get_current_user)):
+    """Quita un contacto del catálogo HUB_ContactosClientes (decisión de diseño:
+    SOLO catálogo — las cotizaciones NO se modifican, conservan su campo Contacto
+    y por eso el contacto puede seguir apareciendo en el historial)."""
     _require_cotiz(current_user)
+    contacto = (body.contacto or "").strip()
+    if not contacto:
+        raise HTTPException(status_code=400, detail="El contacto es obligatorio.")
+    idc = id_cliente.strip().upper()
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        # 1) Borrar del catálogo (si la tabla no existe en esta BD → 400 claro)
+        try:
+            cursor.execute(
+                "DELETE FROM HUB_ContactosClientes WHERE IdCliente = %s AND LTRIM(RTRIM(Contacto)) = %s",
+                (idc, contacto))
+            borrados = cursor.rowcount or 0
+        except Exception:
+            conn.close()
+            raise HTTPException(
+                status_code=400,
+                detail="El catálogo de contactos (HUB_ContactosClientes) no existe en esta base de datos.")
+        # 2) Contar cotizaciones que aún usan ese contacto (para el mensaje de la UI)
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM IndiceMateriales WHERE IdCliente = %s AND Contacto = %s",
+                (idc, contacto))
+            en_cotizaciones = int(cursor.fetchone()[0] or 0)
+        except Exception:
+            en_cotizaciones = 0
+        conn.commit()
+        conn.close()
+        return {"ok": True, "borrados": int(borrados), "en_cotizaciones": en_cotizaciones}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/clientes/{id_cliente}/contactos")
+async def cliente_contactos(id_cliente: str, current_user: dict = Depends(get_current_user)):
+    """Contactos del cliente: catálogo HUB_ContactosClientes + historial de
+    cotizaciones (mismo UNION que el HUB/Field; si el catálogo no existe en la
+    BD, regresa solo el historial)."""
+    _require_cotiz(current_user)
+    idc = id_cliente.strip().upper()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        rows = _contactos_union(cursor, idc)
+        conn.close()
+        return [r for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+def _contactos_union(cursor, idc: str):
+    """Lista de contactos (catálogo ∪ historial), tolerante a BD sin 0031."""
+    try:
+        cursor.execute(
+            "SELECT Contacto FROM ("
+            "  SELECT Contacto FROM HUB_ContactosClientes "
+            "  WHERE IdCliente = %s AND Contacto IS NOT NULL AND LTRIM(RTRIM(Contacto)) <> '' "
+            "  UNION "
+            "  SELECT Contacto FROM IndiceMateriales "
+            "  WHERE IdCliente = %s AND Contacto IS NOT NULL AND LTRIM(RTRIM(Contacto)) <> ''"
+            ") x ORDER BY Contacto ASC", (idc, idc))
+        return [r[0] for r in cursor.fetchall()]
+    except Exception:
         cursor.execute(
             "SELECT DISTINCT Contacto FROM IndiceMateriales "
             "WHERE IdCliente = %s AND Contacto IS NOT NULL AND LTRIM(RTRIM(Contacto)) <> '' "
-            "ORDER BY Contacto ASC", (id_cliente.strip().upper(),))
-        rows = cursor.fetchall()
+            "ORDER BY Contacto ASC", (idc,))
+        return [r[0] for r in cursor.fetchall()]
+
+
+@app.get("/api/clientes/{id_cliente}/contactos/detalle")
+async def cliente_contactos_detalle(id_cliente: str, current_user: dict = Depends(get_current_user)):
+    """Detalle de cada contacto con su origen: en_catálogo (borrable con el botón)
+    y cuántas cotizaciones lo usan (esas NO se tocan al borrar)."""
+    _require_cotiz(current_user)
+    idc = id_cliente.strip().upper()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        # Catálogo (si la tabla no existe → conjunto vacío)
+        catalogo = set()
+        try:
+            cursor.execute(
+                "SELECT LTRIM(RTRIM(Contacto)) FROM HUB_ContactosClientes "
+                "WHERE IdCliente = %s AND Contacto IS NOT NULL AND LTRIM(RTRIM(Contacto)) <> ''",
+                (idc,))
+            catalogo = {r[0] for r in cursor.fetchall()}
+        except Exception:
+            catalogo = set()
+        # Historial: contacto → nº de cotizaciones
+        try:
+            cursor.execute(
+                "SELECT LTRIM(RTRIM(Contacto)), COUNT(*) FROM IndiceMateriales "
+                "WHERE IdCliente = %s AND Contacto IS NOT NULL AND LTRIM(RTRIM(Contacto)) <> '' "
+                "GROUP BY LTRIM(RTRIM(Contacto))", (idc,))
+            hist = {r[0]: int(r[1] or 0) for r in cursor.fetchall()}
+        except Exception:
+            hist = {}
         conn.close()
-        return [r[0] for r in rows]
+        nombres = sorted(set(catalogo) | set(hist), key=lambda s: s.lower())
+        return [
+            {
+                "contacto": n,
+                "en_catalogo": n in catalogo,
+                "n_cotizaciones": hist.get(n, 0),
+            }
+            for n in nombres
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
@@ -4101,6 +4207,40 @@ async def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
         conn.close()
 
 
+@app.get("/api/tickets-oxxogas/saldo")
+async def tickets_oxxogas_saldo(current_user: dict = Depends(get_current_user)):
+    """Saldo de la cuenta Go Vale (HUB_Config 'govale_saldo'/'govale_saldo_fecha').
+
+    El valor lo actualiza el worker del HUB (cron_sync_govale_vouchers.py) cada
+    ~5 min con login en govale-digital.oxxogas.com; aquí solo se lee para
+    mostrarlo en la tarjeta del módulo (mismo estilo/umbral $2,000 que el HUB).
+    Se registra ANTES de la ruta con {ticket_id:int} para que el orden de rutas
+    de FastAPI resuelva 'saldo' como literal."""
+    _require_vales_oxxogas(current_user)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute(
+            "SELECT Clave, Valor FROM HUB_Config "
+            "WHERE Clave IN ('govale_saldo', 'govale_saldo_fecha')"
+        )
+        cfg = {r["Clave"]: r["Valor"] for r in cursor.fetchall()}
+        saldo_raw = (cfg.get("govale_saldo") or "").strip()
+        try:
+            saldo = float(saldo_raw)
+        except (TypeError, ValueError):
+            saldo = None
+        return {
+            "saldo": saldo,
+            "fecha": (cfg.get("govale_saldo_fecha") or "").strip() or None,
+            "umbral": 2000.0,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
+
+
 @app.get("/api/tickets-oxxogas/{ticket_id:int}/imagen")
 async def tickets_oxxogas_imagen(ticket_id: int, w: int = 0,
                                  current_user: dict = Depends(_user_from_header_or_query)):
@@ -4158,7 +4298,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "telegram", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}

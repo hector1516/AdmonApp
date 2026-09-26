@@ -51,7 +51,6 @@
 		],
 		'🔧 Otros': [
 			['AccesoVM', 'Programas VM'],
-			['AccesoTelegram', 'Telegram 📱'],
 			['AccesoDeteccionRed', 'Detección de Red 📡'],
 			['AccesoPdfConfig', 'Guardado PDFs 📁']
 		]

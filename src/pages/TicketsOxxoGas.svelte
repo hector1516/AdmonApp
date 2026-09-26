@@ -13,6 +13,16 @@
 	let error = $state('');
 	let busqueda = $state('');
 
+	// Saldo Go Vale (HUB_Config): lo refresca el worker del HUB cada ~5 min.
+	// Mismo estilo/umbral que la vista "Vales OxxoGas" del HUB: rojo si < $2,000.
+	let saldo = $state(null);       // number | null (null = sin dato/oculto)
+	let saldoFecha = $state('');
+	const UMBRAL_SALDO = 2000;
+
+	function fmtSaldo(v) {
+		return v.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	}
+
 	function tieneAcceso() {
 		try {
 			const u = JSON.parse(localStorage.getItem('admon_user') || 'null');
@@ -51,7 +61,16 @@
 		loading = true;
 		error = '';
 		try {
-			tickets = await api.get('/tickets-oxxogas');
+			// Saldo y tickets en paralelo: si el saldo falla solo se oculta la card.
+			const [lista, s] = await Promise.all([
+				api.get('/tickets-oxxogas'),
+				api.get('/tickets-oxxogas/saldo').catch(() => null)
+			]);
+			tickets = lista;
+			if (s && typeof s.saldo === 'number') {
+				saldo = s.saldo;
+				saldoFecha = s.fecha || 'Nunca';
+			}
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : e.message || 'No se pudo cargar.';
 		} finally {
@@ -79,6 +98,24 @@
 		<div style="flex:1"></div>
 		<span class="count">{filtrados.length} ticket{filtrados.length === 1 ? '' : 's'}</span>
 	</div>
+
+	{#if saldo !== null}
+		{@const bajo = saldo < UMBRAL_SALDO}
+		<div class="saldo-card" class:bajo>
+			<div class="saldo-main">
+				<div class="saldo-label">💰 Saldo Go Vale</div>
+				<div class="saldo-num" class:rojo={bajo} class:verde={!bajo}>${fmtSaldo(saldo)}</div>
+				<div class="saldo-alerta" class:rojo={bajo} class:verde={!bajo}>
+					{bajo ? '⚠️ Saldo bajo — recarga pronto' : '✅ Saldo disponible para generar vales'}
+				</div>
+			</div>
+			<div class="saldo-side">
+				<div>🔄 Revisado:</div>
+				<div class="saldo-fecha">{saldoFecha}</div>
+				<div class="saldo-umbral">Umbral alerta: ${UMBRAL_SALDO.toLocaleString('es-MX')}</div>
+			</div>
+		</div>
+	{/if}
 
 	<div class="field">
 		<input class="input" placeholder="🔍 Buscar por folio, cliente, estación, vehículo, factura…" bind:value={busqueda} />
@@ -146,4 +183,17 @@
 	.chip.ok { color: #4ade80; background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.25); }
 	.chip.pend { color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.3); }
 	.row { font-size: 0.75rem; color: #cbd5e1; margin-top: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+	/* Saldo Go Vale — mismo look que la vista Vales OxxoGas del HUB */
+	.saldo-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-radius: 14px; padding: 18px 26px; margin: 0 0 14px; box-shadow: 0 4px 18px rgba(0,0,0,.35); background: linear-gradient(135deg, #052E16 0%, #022C22 100%); border: 2px solid #16A34A; }
+	.saldo-card.bajo { background: linear-gradient(135deg, #7F1D1D 0%, #450A0A 100%); border-color: #EF4444; }
+	.saldo-label { color: #94a3b8; font-size: .85rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+	.saldo-num { font-size: 2.4rem; font-weight: 800; line-height: 1.15; margin-top: 2px; color: #DCFCE7; }
+	.saldo-num.rojo { color: #EF4444; }
+	.saldo-num.verde { color: #22C55E; }
+	.saldo-alerta { font-size: .95rem; font-weight: 600; margin-top: 2px; color: #FEE2E2; }
+	.saldo-alerta.verde { color: #DCFCE7; }
+	.saldo-side { text-align: right; color: #94a3b8; font-size: .8rem; min-width: 160px; }
+	.saldo-fecha { color: #CBD5E1; font-weight: 600; }
+	.saldo-umbral { margin-top: 8px; font-size: .75rem; }
 </style>

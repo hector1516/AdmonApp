@@ -2,11 +2,12 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { clientes, clienteContactos } from '$lib/cotizacionesApi.js';
+	import { clientes } from '$lib/cotizacionesApi.js';
 
 	// Detalle de cliente como el HUB + administración de sus contactos.
-	// Los contactos son historial en las cotizaciones: editar = renombrar
-	// en todas las cotizaciones del cliente.
+	// Los contactos se muestran con su origen: catálogo (HUB_ContactosClientes,
+	// borrable) e historial de cotizaciones (renombrable en todas). Borrar solo
+	// quita del catálogo: las cotizaciones conservan su campo Contacto.
 
 	let { id } = $props();
 	const idCliente = String(id || '').toUpperCase();
@@ -18,7 +19,7 @@
 
 	let nombre = $state('');
 	let dias = $state(30);
-	let contactos = $state([]);
+	let contactos = $state([]); // [{contacto, en_catalogo, n_cotizaciones}]
 	let editandoContacto = $state(null);
 	let nuevoNombreContacto = $state('');
 
@@ -37,8 +38,15 @@
 
 	async function cargarContactos() {
 		try {
-			contactos = await clienteContactos(idCliente);
-		} catch {
+			const res = await fetch(`/api/clientes/${idCliente}/contactos/detalle`, {
+				headers: auth.authHeader()
+			});
+			const data = await res.json().catch(() => []);
+			if (!res.ok) throw new Error(data.detail || 'Error al cargar contactos.');
+			contactos = Array.isArray(data) ? data : [];
+		} catch (e) {
+			if (String(e.message || '').includes('Sesión expirada')) throw e;
+			// offline / error: lista vacía (consistente con el resto del módulo)
 			contactos = [];
 		}
 	}
@@ -113,6 +121,40 @@
 		nuevoNombreContacto = c;
 	}
 
+	// Borrar contacto: SOLO del catálogo HUB_ContactosClientes. Las cotizaciones
+	// no se modifican, por eso el backend regresa en_cotizaciones para avisar
+	// si seguirá visible en el historial.
+	async function borrarContacto(c) {
+		const extra = c.n_cotizaciones > 0
+			? `\n\nSe quita del catálogo. ${c.n_cotizaciones} cotización(es) lo usan → NO se modifican y seguirá en la lista por el historial.`
+			: '\n\nNo pertenece a ninguna cotización: desaparecerá de la lista.';
+		if (!confirm(`¿Quitar "${c.contacto}" del catálogo de contactos?${extra}`)) return;
+		error = '';
+		msg = '';
+		busy = true;
+		try {
+			const res = await fetch(`/api/clientes/${idCliente}/contactos`, {
+				method: 'DELETE',
+				headers: apiHeaders(),
+				body: JSON.stringify({ contacto: c.contacto })
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.detail || 'Error al quitar el contacto.');
+			if (data.borrados > 0 && data.en_cotizaciones > 0) {
+				msg = `✅ "${c.contacto}" quitado del catálogo. Seguirá visible por ${data.en_cotizaciones} cotización(es).`;
+			} else if (data.borrados > 0) {
+				msg = `✅ "${c.contacto}" quitado del catálogo.`;
+			} else {
+				msg = `ℹ️ "${c.contacto}" no estaba en el catálogo (solo existe en el historial de cotizaciones).`;
+			}
+			await cargarContactos();
+		} catch (e) {
+			error = e.message || 'Error al quitar el contacto.';
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function guardarRenombre() {
 		const nuevo = nuevoNombreContacto.trim();
 		if (!nuevo) {
@@ -173,14 +215,17 @@
 
 		<div class="card">
 			<div class="card-title">👥 Contactos del cliente ({contactos.length})</div>
-			<p class="hint">Del historial de sus cotizaciones. Editar renombra el contacto en todas.</p>
+			<p class="hint">
+				Catálogo + historial de cotizaciones. ✏️ renombra el contacto en todas sus cotizaciones;
+				🗑️ lo quita solo del catálogo (las cotizaciones no cambian).
+			</p>
 			{#if contactos.length === 0}
 				<p style="font-size: 0.85rem; color: var(--color-text-muted);">Sin contactos registrados.</p>
 			{:else}
 				<div class="list">
 					{#each contactos as c}
 						<div class="list-card" style="cursor: default;">
-							{#if editandoContacto === c}
+							{#if editandoContacto === c.contacto}
 								<input
 									class="input"
 									bind:value={nuevoNombreContacto}
@@ -192,8 +237,22 @@
 									<button class="btn btn-sm btn-primary" on:click={guardarRenombre} disabled={busy}>💾</button>
 								</div>
 							{:else}
-								<span style="flex: 1;">{c}</span>
-								<button class="btn btn-sm btn-secondary" on:click={() => empezarRenombre(c)} title="Renombrar">✏️</button>
+								<span style="flex: 1; min-width: 0;">
+									{c.contacto}
+									{#if c.en_catalogo}<span class="tag" title="En el catálogo de contactos">📁</span>{/if}
+									{#if c.n_cotizaciones > 0}
+										<span class="tag" title="Usado en {c.n_cotizaciones} cotización(es)">📄 {c.n_cotizaciones}</span>
+									{/if}
+								</span>
+								{#if c.en_catalogo}
+									<button
+										class="btn btn-sm btn-danger"
+										on:click={() => borrarContacto(c)}
+										disabled={busy}
+										title="Quitar del catálogo (no borra cotizaciones)"
+									>🗑️</button>
+								{/if}
+								<button class="btn btn-sm btn-secondary" on:click={() => empezarRenombre(c.contacto)} title="Renombrar en todas las cotizaciones">✏️</button>
 							{/if}
 						</div>
 					{/each}
@@ -213,6 +272,16 @@
 <style>
 	.card-title { font-weight: 700; font-size: 1rem; margin-bottom: 0.25rem; }
 	.hint { font-size: 0.8rem; color: var(--color-text-muted); }
+	.tag {
+		font-size: 0.66rem;
+		color: var(--color-text-muted);
+		background: rgba(148, 163, 184, 0.12);
+		border-radius: 999px;
+		padding: 0.05rem 0.4rem;
+		margin-left: 0.35rem;
+		vertical-align: middle;
+		white-space: nowrap;
+	}
 	.msg { padding: 0.6rem 0.75rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 0.75rem; }
 	.msg.err { background: rgba(239,68,68,0.1); color: #EF4444; }
 	.msg.ok { background: rgba(34,197,94,0.1); color: #22C55E; }
