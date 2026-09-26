@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.responses import JSONResponse, Response
 from api.pdf_cotizacion import build_cotizacion_pdf
 from api.pdf_reporte import build_service_report_pdf
+from api.pdf_remision import build_remision_pdf
+from api import sat_helper
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import pymssql
@@ -670,18 +672,24 @@ def _fstr(v) -> str:
 
 def _partida_row_to_dict(folio, row) -> dict:
     # row: Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor,
-    #      Proveedor, TiempoEntregaDias, Dolar, Flete
+    #      Proveedor, TiempoEntregaDias, Dolar, Flete,
+    #      [+ SAT opcional: ClaveProdServ, ClaveUnidad, Fuente]  (LEFT JOIN sidecar)
     compra = _fnum(row[3])
     factor = _fnum(row[4])
     cant = int(row[1] or 0)
     flete = _fnum(row[8])
     venta_unit = compra * (1.0 + factor)
+    sat_prod = row[9] if len(row) > 9 else None
+    sat_uni = row[10] if len(row) > 10 else None
+    sat_fuente = row[11] if len(row) > 11 else None
     return {
         "folio": folio, "partida": row[0], "cantidad": cant,
         "descripcion": row[2] or "", "precio_compra": compra, "factor": factor,
         "proveedor": row[5] or "", "tiempo_entrega": int(row[6] or 0),
         "dolar": _fnum(row[7]), "flete": flete,
         "venta_unit": venta_unit, "total_venta": venta_unit * cant + flete,
+        "sat_prod_serv": sat_prod or "", "sat_unidad": sat_uni or "",
+        "sat_fuente": sat_fuente or "",
     }
 
 
@@ -743,6 +751,16 @@ def _db_clone_quotation(cur, folio, autor) -> int:
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (nuevo, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]),
         )
+    # Copiar el snapshot SAT de las partidas originales al folio clonado
+    # (el índice HUB_SatArticulos no se duplica, solo el sidecar por partida)
+    try:
+        cur.execute(
+            "INSERT INTO HUB_PartidasSat (Folio, Partida, ClaveNormalizada, ClaveProdServ, ClaveUnidad, Fuente) "
+            "SELECT %s, Partida, ClaveNormalizada, ClaveProdServ, ClaveUnidad, Fuente "
+            "FROM HUB_PartidasSat WHERE Folio = %s",
+            (nuevo, int(folio)))
+    except Exception as e:
+        print(f"[sat] Error copiando snapshot SAT al clonar: {e}")
     return nuevo
 
 
@@ -781,6 +799,11 @@ class PartidaCreate(BaseModel):
     tiempo_entrega: int = 1
     dolar: float = 0.0
     flete: float = 0.0
+    # Códigos SAT CFDI 4.0 (opcionales). Si llegan vacíos el servidor los
+    # resuelve solo (sidecar → índice → reglas → Gemini); si llegan con valor
+    # se guardan como captura MANUAL.
+    sat_prod_serv: Optional[str] = None
+    sat_unidad: Optional[str] = None
 
 
 class PartidaUpdate(PartidaCreate):
@@ -943,6 +966,11 @@ async def cotizacion_delete(folio: int, current_user: dict = Depends(get_current
             conn.close()
             raise HTTPException(status_code=400, detail="Cotización bloqueada (lista para facturar/facturada).")
         cursor.execute("DELETE FROM Partidas WHERE Folio = %s", (int(folio),))
+        # Limpieza del snapshot SAT (tabla nueva sidecar, no existe antes de 0037)
+        try:
+            cursor.execute("DELETE FROM HUB_PartidasSat WHERE Folio = %s", (int(folio),))
+        except Exception:
+            pass
         cursor.execute("DELETE FROM IndiceMateriales WHERE Folio = %s", (int(folio),))
         conn.commit()
         conn.close()
@@ -1000,9 +1028,12 @@ def _cotizacion_pdf_bytes(folio: int) -> tuple:
         "condiciones_pago": r[9] or 30, "telefono": telefono,
     }
     cursor.execute(
-        "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, "
-        "Proveedor, TiempoEntregaDias, Dolar, Flete "
-        "FROM Partidas WHERE Folio = %s ORDER BY Partida ASC", (int(folio),))
+        "SELECT P.Partida, P.Cantidad, P.Descripcion, P.PrecioCompraUnitario, P.Factor, "
+        "P.Proveedor, P.TiempoEntregaDias, P.Dolar, P.Flete, "
+        "S.ClaveProdServ, S.ClaveUnidad, S.Fuente "
+        "FROM Partidas P "
+        "LEFT JOIN HUB_PartidasSat S ON S.Folio = P.Folio AND S.Partida = P.Partida "
+        "WHERE P.Folio = %s ORDER BY P.Partida ASC", (int(folio),))
     parts = [_partida_row_to_dict(int(folio), row) for row in cursor.fetchall()]
     conn.close()
     if not parts:
@@ -1109,9 +1140,12 @@ async def cotizacion_partidas(folio: int, current_user: dict = Depends(get_curre
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, "
-            "Proveedor, TiempoEntregaDias, Dolar, Flete "
-            "FROM Partidas WHERE Folio = %s ORDER BY Partida ASC", (int(folio),))
+            "SELECT P.Partida, P.Cantidad, P.Descripcion, P.PrecioCompraUnitario, P.Factor, "
+            "P.Proveedor, P.TiempoEntregaDias, P.Dolar, P.Flete, "
+            "S.ClaveProdServ, S.ClaveUnidad, S.Fuente "
+            "FROM Partidas P "
+            "LEFT JOIN HUB_PartidasSat S ON S.Folio = P.Folio AND S.Partida = P.Partida "
+            "WHERE P.Folio = %s ORDER BY P.Partida ASC", (int(folio),))
         rows = cursor.fetchall()
         conn.close()
         return [_partida_row_to_dict(int(folio), r) for r in rows]
@@ -1123,6 +1157,11 @@ async def cotizacion_partidas(folio: int, current_user: dict = Depends(get_curre
 async def cotizacion_partida_add(folio: int, body: PartidaCreate, current_user: dict = Depends(get_current_user)):
     _require_cotiz(current_user)
     _validate_partida_input(body.cantidad, body.descripcion)
+    # Códigos SAT capturados por el usuario: validar ANTES de escribir
+    if body.sat_prod_serv and body.sat_prod_serv.strip():
+        err = sat_helper.validar_codigos(body.sat_prod_serv, body.sat_unidad)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -1135,9 +1174,16 @@ async def cotizacion_partida_add(folio: int, body: PartidaCreate, current_user: 
             raise HTTPException(status_code=400, detail="Cotización bloqueada.")
         num = _db_add_partida(cursor, folio, body.cantidad, body.descripcion, body.precio_compra,
                               body.factor, body.proveedor, body.tiempo_entrega, body.dolar, body.flete)
+        # Hook SAT auto-alimentado (sidecar → índice → reglas → 1 llamada IA en miss)
+        try:
+            sat = sat_helper.guardar_partida_sat(
+                cursor, folio, num, body.descripcion, body.sat_prod_serv, body.sat_unidad)
+        except ValueError as e:
+            conn.close()
+            raise HTTPException(status_code=400, detail=str(e))
         conn.commit()
         conn.close()
-        return {"ok": True, "partida": num}
+        return {"ok": True, "partida": num, "sat": sat}
     except HTTPException:
         raise
     except Exception as e:
@@ -1148,6 +1194,11 @@ async def cotizacion_partida_add(folio: int, body: PartidaCreate, current_user: 
 async def cotizacion_partida_update(folio: int, partida: int, body: PartidaUpdate, current_user: dict = Depends(get_current_user)):
     _require_cotiz(current_user)
     _validate_partida_input(body.cantidad, body.descripcion)
+    # Códigos SAT capturados por el usuario: validar ANTES de escribir
+    if body.sat_prod_serv and body.sat_prod_serv.strip():
+        err = sat_helper.validar_codigos(body.sat_prod_serv, body.sat_unidad)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -1166,9 +1217,17 @@ async def cotizacion_partida_update(folio: int, partida: int, body: PartidaUpdat
              (body.proveedor or "").strip(), int(body.tiempo_entrega or 0), float(body.dolar or 0.0),
              float(body.flete or 0.0), int(folio), int(partida)),
         )
+        # Hook SAT: si cambió la descripción se re-resuelve; si el usuario
+        # envía códigos explícitos estos ganan (fuente MANUAL)
+        try:
+            sat = sat_helper.guardar_partida_sat(
+                cursor, folio, partida, body.descripcion, body.sat_prod_serv, body.sat_unidad)
+        except ValueError as e:
+            conn.close()
+            raise HTTPException(status_code=400, detail=str(e))
         conn.commit()
         conn.close()
-        return {"ok": True}
+        return {"ok": True, "sat": sat}
     except HTTPException:
         raise
     except Exception as e:
@@ -1189,9 +1248,276 @@ async def cotizacion_partida_delete(folio: int, partida: int, current_user: dict
             conn.close()
             raise HTTPException(status_code=400, detail="Cotización bloqueada.")
         cursor.execute("DELETE FROM Partidas WHERE Folio = %s AND Partida = %s", (int(folio), int(partida)))
+        # Borrar también el snapshot SAT de esa partida
+        try:
+            cursor.execute("DELETE FROM HUB_PartidasSat WHERE Folio = %s AND Partida = %s",
+                           (int(folio), int(partida)))
+        except Exception:
+            pass
         conn.commit()
         conn.close()
         return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ----- SAT: sugerencia para el formulario (botón 🤖) -----
+
+class SatSugerir(BaseModel):
+    descripcion: str = ""
+
+
+@app.post("/api/sat/sugerir")
+async def sat_sugerir(body: SatSugerir, current_user: dict = Depends(get_current_user)):
+    """Resuelve códigos SAT para mostrarlos en el formulario SIN guardar la
+    partida: índice → reglas keywords → 1 llamada a Gemini. Solo hace upsert
+    del índice (HUB_SatArticulos), no toca la partida ni las tablas existentes."""
+    _require_cotiz(current_user)
+    desc = (body.descripcion or "").strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail="La descripción es obligatoria.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        sugerencia = sat_helper.sugerir_para_ui(cursor, desc)
+        conn.commit()
+        conn.close()
+        return {"sugerencia": sugerencia}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# ----- Remisiones (desde cotizaciones de materiales) -----
+# Port del módulo del HUB (migración 0030): creación inmutable con folio
+# RM-CM#####-NN, asignación de usuario para firma en Field y PDF.
+# Los códigos SAT del PDF se resuelven con un JOIN a HUB_PartidasSat
+# (FolioCotizacion + Partida) — NO se altera la tabla RemisionPartidas.
+
+class RemisionCreate(BaseModel):
+    partidas: List[Dict[str, Any]] = []  # [{partida, cantidad, descripcion}]
+
+
+class RemisionAsignar(BaseModel):
+    id_usuario: Optional[int] = None
+
+
+@app.get("/api/remisiones/usuarios")
+async def remision_usuarios(current_user: dict = Depends(get_current_user)):
+    """Usuarios activos para asignar la firma de la remisión en Field."""
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT Id, Nombre, Email FROM HUB_Users WHERE Activo = 1 ORDER BY Nombre")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": r[0], "nombre": r[1] or "", "email": r[2] or ""} for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/cotizaciones/{folio:int}/remisiones")
+async def remisiones_list(folio: int, current_user: dict = Depends(get_current_user)):
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT R.IdRemision, R.FolioRemision, R.FechaCreacion, R.CreadoPor, "
+            "R.IdUsuarioAsignado, U.Nombre, R.FirmaConformidad, R.FechaFirma "
+            "FROM IndiceRemisiones R "
+            "LEFT JOIN HUB_Users U ON U.Id = R.IdUsuarioAsignado "
+            "WHERE R.FolioCotizacion = %s ORDER BY R.IdRemision DESC", (int(folio),))
+        rows = cursor.fetchall()
+        conn.close()
+        out = []
+        for r in rows:
+            fecha = r[2]
+            out.append({
+                "id": int(r[0]), "folio": r[1] or "",
+                "fecha": fecha.strftime("%d/%m/%Y %H:%M") if hasattr(fecha, "strftime") else str(fecha or ""),
+                "creado_por": r[3] or "",
+                "id_asignado": int(r[4]) if r[4] is not None else None,
+                "asignado_nombre": r[5] or "",
+                "firmada": bool(r[6]),
+                "fecha_firma": (r[7].strftime("%d/%m/%Y %H:%M")
+                                if hasattr(r[7], "strftime") else str(r[7] or "")),
+            })
+        return out
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.post("/api/cotizaciones/{folio:int}/remisiones")
+async def remision_create(folio: int, body: RemisionCreate, current_user: dict = Depends(get_current_user)):
+    """Crea una remisión inmutable desde la CM. Copia cantidad/descripción de
+    las partidas elegidas (SIN precios); los códigos SAT se resuelven al
+    generar el PDF vía HUB_PartidasSat."""
+    _require_cotiz(current_user)
+    seleccionadas = [p for p in (body.partidas or [])
+                     if int(p.get("cantidad") or 0) >= 1 and str(p.get("descripcion") or "").strip()]
+    if not seleccionadas:
+        raise HTTPException(status_code=400, detail="La remisión necesita al menos una partida.")
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        color = _db_get_color(cursor, folio)
+        if color is None:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        if color in (1, 2):
+            conn.close()
+            raise HTTPException(status_code=400, detail="Cotización bloqueada.")
+        # Encabezado snapshot (mismo patrón que el HUB)
+        cursor.execute(
+            "SELECT IdCliente, Contacto, Descripcion, Autor FROM IndiceMateriales WHERE Folio = %s",
+            (int(folio),))
+        cm = cursor.fetchone()
+        if not cm:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cotización no encontrada")
+        # Folio contiguo RM-CM#####-NN por cotización (contador = total existente + 1)
+        cursor.execute(
+            "SELECT ISNULL(COUNT(*), 0) FROM IndiceRemisiones WHERE FolioCotizacion = %s",
+            (int(folio),))
+        n = int(cursor.fetchone()[0]) + 1
+        folio_rm = f"RM-CM{int(folio):05d}-{n:02d}"
+        creador = current_user.get("nombre") or current_user.get("email") or ""
+        cursor.execute(
+            "INSERT INTO IndiceRemisiones "
+            "(FolioRemision, FolioCotizacion, IdCliente, Contacto, Descripcion, Autor, CreadoPor) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (folio_rm, int(folio), (cm[0] or "").strip(), cm[1] or "", cm[2] or "",
+             cm[3] or "", creador))
+        cursor.execute("SELECT @@IDENTITY")
+        idr = cursor.fetchone()[0]
+        if not idr:
+            conn.close()
+            raise HTTPException(status_code=500, detail="No se obtuvo el id de la remisión.")
+        idr = int(idr)
+        for p in seleccionadas:
+            cursor.execute(
+                "INSERT INTO RemisionPartidas (IdRemision, Partida, Cantidad, Descripcion) "
+                "VALUES (%s, %s, %s, %s)",
+                (idr, int(p.get("partida") or 0), int(p.get("cantidad") or 1),
+                 str(p.get("descripcion") or "").strip()))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "id": idr, "folio": folio_rm}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.delete("/api/remisiones/{id_remision:int}")
+async def remision_delete(id_remision: int, current_user: dict = Depends(get_current_user)):
+    """Borra la remisión (índice + partidas por cascade). No se puede editar."""
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT FolioRemision FROM IndiceRemisiones WHERE IdRemision = %s",
+                       (int(id_remision),))
+        r = cursor.fetchone()
+        if not r:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Remisión no encontrada")
+        # RemisionPartidas tiene FK ON DELETE CASCADE (migración 0030)
+        cursor.execute("DELETE FROM IndiceRemisiones WHERE IdRemision = %s", (int(id_remision),))
+        conn.commit()
+        conn.close()
+        return {"ok": True, "folio": r[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/remisiones/{id_remision:int}/asignar")
+async def remision_asignar(id_remision: int, body: RemisionAsignar,
+                           current_user: dict = Depends(get_current_user)):
+    """Asigna (o con id_usuario null desasigna) un usuario para firmar en Field."""
+    _require_cotiz(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT IdRemision FROM IndiceRemisiones WHERE IdRemision = %s",
+                       (int(id_remision),))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Remisión no encontrada")
+        if body.id_usuario is not None:
+            cursor.execute("SELECT Id FROM HUB_Users WHERE Id = %s AND Activo = 1",
+                           (int(body.id_usuario),))
+            if not cursor.fetchone():
+                conn.close()
+                raise HTTPException(status_code=400, detail="Usuario no válido o inactivo.")
+        cursor.execute("UPDATE IndiceRemisiones SET IdUsuarioAsignado = %s WHERE IdRemision = %s",
+                       (int(body.id_usuario) if body.id_usuario is not None else None,
+                        int(id_remision)))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/remisiones/{id_remision:int}/pdf")
+async def remision_pdf(id_remision: int, request: Request):
+    """PDF de la remisión (auth por header o query ?s=TOKEN para abrir en pestaña)."""
+    _user = _user_from_header_or_query(request)
+    _require_cotiz(_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT R.IdRemision, R.FolioRemision, R.FolioCotizacion, R.IdCliente, "
+            "R.Contacto, R.Descripcion, R.Autor, R.CreadoPor, R.FechaCreacion, "
+            "R.FirmaConformidad, R.FechaFirma, "
+            "C.Cliente AS ClienteNombre, U.Nombre AS AsignadoNombre, "
+            "(SELECT TOP 1 Telefono FROM MAC WHERE Nombre = R.Autor ORDER BY Telefono DESC) AS Telefono "
+            "FROM IndiceRemisiones R "
+            "LEFT JOIN clientes C ON C.IdCliente = R.IdCliente "
+            "LEFT JOIN HUB_Users U ON U.Id = R.IdUsuarioAsignado "
+            "WHERE R.IdRemision = %s", (int(id_remision),))
+        r = cursor.fetchone()
+        if not r:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Remisión no encontrada")
+        details = {
+            "IdRemision": r[0], "FolioRemision": r[1], "FolioCotizacion": r[2],
+            "IdCliente": r[3], "Contacto": r[4], "Descripcion": r[5], "Autor": r[6],
+            "CreadoPor": r[7], "FechaCreacion": r[8], "FirmaConformidad": r[9],
+            "FechaFirma": r[10], "ClienteNombre": r[11],
+            "UsuarioAsignadoNombre": r[12], "Telefono": r[13] or "",
+        }
+        # Partidas + códigos SAT resueltos por coordenada (FolioCM + Partida)
+        # contra el sidecar HUB_PartidasSat — sin tocar RemisionPartidas.
+        cursor.execute(
+            "SELECT RP.Partida, RP.Cantidad, RP.Descripcion, "
+            "S.ClaveProdServ, S.ClaveUnidad "
+            "FROM RemisionPartidas RP "
+            "LEFT JOIN HUB_PartidasSat S ON S.Folio = %s AND S.Partida = RP.Partida "
+            "WHERE RP.IdRemision = %s ORDER BY RP.Partida ASC",
+            (int(r[2]), int(id_remision)))
+        items = [{"Partida": ir[0], "Cantidad": ir[1], "Descripcion": ir[2],
+                  "sat_prod_serv": ir[3] or "", "sat_unidad": ir[4] or ""}
+                 for ir in cursor.fetchall()]
+        conn.close()
+        if not items:
+            raise HTTPException(status_code=400, detail="La remisión no tiene partidas.")
+        pdf_bytes = build_remision_pdf(details, items)
+        fname = f"{details['FolioRemision']}.pdf"
+        return Response(content=pdf_bytes, media_type="application/pdf", headers={
+            "Content-Disposition": f'inline; filename="{fname}"'})
     except HTTPException:
         raise
     except Exception as e:
@@ -1411,6 +1737,10 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
                     if folio is None:
                         raise Exception("Sin folio (aún no sincronizada).")
                     cursor.execute("DELETE FROM Partidas WHERE Folio = %s", (folio,))
+                    try:
+                        cursor.execute("DELETE FROM HUB_PartidasSat WHERE Folio = %s", (folio,))
+                    except Exception:
+                        pass
                     cursor.execute("DELETE FROM IndiceMateriales WHERE Folio = %s", (folio,))
                     r.update({"status": "ok", "folio": folio})
                 elif it.entity == "cotizacion" and it.action == "nota":
@@ -1428,6 +1758,13 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
                                           float(p.get("precio_compra", 0.0)), float(p.get("factor", 0.0)),
                                           p.get("proveedor", ""), int(p.get("tiempo_entrega", 0) or 0),
                                           float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0))
+                    # Hook SAT igual que en el POST online (la cola trae los campos si el cliente los envió)
+                    try:
+                        sat_helper.guardar_partida_sat(
+                            cursor, folio, num, p.get("descripcion", ""),
+                            p.get("sat_prod_serv"), p.get("sat_unidad"))
+                    except Exception as e:
+                        print(f"[sat] sync add: {e}")
                     r.update({"status": "ok", "folio": folio, "partida": num})
                 elif it.entity == "partida" and it.action == "update":
                     folio = _folio_of(p)
@@ -1443,6 +1780,12 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
                          float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0),
                          folio, int(p.get("partida", 0))),
                     )
+                    try:
+                        sat_helper.guardar_partida_sat(
+                            cursor, folio, int(p.get("partida", 0)), (p.get("descripcion") or "").strip(),
+                            p.get("sat_prod_serv"), p.get("sat_unidad"))
+                    except Exception as e:
+                        print(f"[sat] sync update: {e}")
                     r.update({"status": "ok", "folio": folio})
                 elif it.entity == "partida" and it.action == "delete":
                     folio = _folio_of(p)
@@ -1450,6 +1793,11 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
                         raise Exception("Sin folio (aún no sincronizada).")
                     cursor.execute("DELETE FROM Partidas WHERE Folio = %s AND Partida = %s",
                                    (folio, int(p.get("partida", 0))))
+                    try:
+                        cursor.execute("DELETE FROM HUB_PartidasSat WHERE Folio = %s AND Partida = %s",
+                                       (folio, int(p.get("partida", 0))))
+                    except Exception:
+                        pass
                     r.update({"status": "ok", "folio": folio})
                 else:
                     r["message"] = f"Entidad/acción no soportada: {it.entity}/{it.action}"

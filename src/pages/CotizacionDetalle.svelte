@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { header, partidas, borrar, clonar } from '$lib/cotizacionesApi.js';
+	import { header, partidas, borrar, clonar, remisiones, remisionCrear, remisionBorrar, remisionAsignar, remisionUsuarios, remisionPdfDownload } from '$lib/cotizacionesApi.js';
 	import { folioFmt, fmtMXN, totales, mapEstatus, COLOR_LABEL } from '$lib/cotizaciones.js';
 
 	let { clave } = $props();
@@ -13,6 +13,15 @@
 	let error = $state('');
 	let msg = $state('');
 	let busy = $state(false);
+
+	// --- Remisiones (port del HUB) ---
+	let rems = $state([]);
+	let mostrandoCrear = $state(false);
+	let remRows = $state([]); // { incluida, partida, cantidad, descripcion }
+	let remBusy = $state(false);
+	let usuarios = $state([]);
+	let asignandoId = $state(null); // id de remisión en modo asignar
+	let asignSel = $state('');
 
 	function tieneAcceso() {
 		try {
@@ -34,6 +43,16 @@
 		try {
 			h = await header(clave);
 			items = await partidas(h.folio ?? h.idLocal);
+			// Remisiones solo existen con folio real (online); sin folio queda vacío
+			if (h.folio != null) {
+				try {
+					rems = await remisiones(h.folio);
+				} catch {
+					rems = [];
+				}
+			} else {
+				rems = [];
+			}
 		} catch (e) {
 			console.error('Error cargando detalle:', e);
 			error = e.message === 'Sesión expirada' ? e.message : `No se pudo cargar (${e.message || 'sin conexión'}).`;
@@ -87,6 +106,115 @@
 		} catch (e) {
 			error = e.message || 'No se pudo eliminar. Revisa tu conexión.';
 			busy = false;
+		}
+	}
+
+	// ---- Remisiones (port del módulo del HUB) ----
+
+	let remSelCount = $derived(remRows.filter((r) => r.incluida && (parseInt(r.cantidad, 10) || 0) >= 1).length);
+
+	function abrirCrearRemision() {
+		if (!h || h.folio == null) return;
+		// Editor en línea: cantidades editables + checkbox para quitar partidas
+		remRows = items.map((p) => ({
+			incluida: true,
+			partida: p.partida,
+			cantidad: p.cantidad,
+			descripcion: p.descripcion
+		}));
+		mostrandoCrear = true;
+		error = '';
+		msg = '';
+	}
+
+	function cancelarCrearRemision() {
+		mostrandoCrear = false;
+		remRows = [];
+	}
+
+	async function crearRemision() {
+		const sel = remRows.filter((r) => r.incluida && (parseInt(r.cantidad, 10) || 0) >= 1);
+		if (!sel.length) {
+			error = 'Selecciona al menos una partida para la remisión.';
+			return;
+		}
+		remBusy = true;
+		error = '';
+		msg = '';
+		try {
+			const r = await remisionCrear(
+				h.folio,
+				sel.map((s) => ({
+					partida: s.partida,
+					cantidad: parseInt(s.cantidad, 10) || 1,
+					descripcion: s.descripcion
+				}))
+			);
+			msg = `🎉 Remisión creada: ${r.folio}`;
+			mostrandoCrear = false;
+			remRows = [];
+			rems = await remisiones(h.folio);
+		} catch (e) {
+			error = e.message || 'No se pudo crear la remisión.';
+		} finally {
+			remBusy = false;
+		}
+	}
+
+	async function borrarRemision(r) {
+		if (!confirm(`¿Eliminar la remisión ${r.folio}? Se borrará el índice y sus partidas (irreversible).`)) return;
+		remBusy = true;
+		error = '';
+		msg = '';
+		try {
+			await remisionBorrar(r.id);
+			msg = `Remisión ${r.folio} eliminada.`;
+			rems = await remisiones(h.folio);
+		} catch (e) {
+			error = e.message || 'No se pudo eliminar la remisión.';
+		} finally {
+			remBusy = false;
+		}
+	}
+
+	async function abrirAsignar(r) {
+		asignandoId = asignandoId === r.id ? null : r.id;
+		if (asignandoId !== r.id) return;
+		asignSel = r.id_asignado ? String(r.id_asignado) : '';
+		if (!usuarios.length) {
+			try {
+				usuarios = await remisionUsuarios();
+			} catch (e) {
+				error = e.message || 'No se pudieron cargar los usuarios.';
+				asignandoId = null;
+			}
+		}
+	}
+
+	async function guardarAsignar(r) {
+		remBusy = true;
+		error = '';
+		msg = '';
+		try {
+			await remisionAsignar(r.id, asignSel ? parseInt(asignSel, 10) : null);
+			msg = asignSel ? '✅ Remisión asignada (firmará en Field).' : '✅ Asignación removida.';
+			asignandoId = null;
+			rems = await remisiones(h.folio);
+		} catch (e) {
+			error = e.message || 'No se pudo guardar la asignación.';
+		} finally {
+			remBusy = false;
+		}
+	}
+
+	async function descargarRemisionPdf(r) {
+		error = '';
+		msg = '';
+		try {
+			await remisionPdfDownload(r.id, r.folio);
+			msg = `📥 Descargando ${r.folio}.pdf`;
+		} catch (e) {
+			error = e.message || 'No se pudo generar el PDF.';
 		}
 	}
 </script>
@@ -157,6 +285,80 @@
 				<div style="display: flex; justify-content: space-between;"><span style="color: var(--color-text-muted);">IVA 16%</span><strong>{fmtMXN(tots.iva)}</strong></div>
 				<div style="display: flex; justify-content: space-between; font-size: 1.05rem;"><span>Total</span><strong style="color: var(--color-primary-light);">{fmtMXN(tots.total)}</strong></div>
 			</div>
+		</div>
+
+		<div class="card" style="margin-bottom: 0.75rem;">
+			<div class="card-title">🧾 Remisiones ({rems.length})</div>
+			<p class="hint">Documento sin precios para entrega; el cliente lo firma en Field.</p>
+
+			{#if mostrandoCrear}
+				<div style="border: 1px solid var(--color-border, #334155); border-radius: 8px; padding: 0.6rem; margin-top: 0.5rem;">
+					<p class="hint" style="margin-top: 0;">
+						Edita cantidades y desmarca las partidas que NO van. Sin precios. Al crear queda inmutable (solo se puede borrar).
+					</p>
+					{#each remRows as row, i (row.partida)}
+						<div style="display: flex; gap: 0.5rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid rgba(148,163,184,0.15);">
+							<input type="checkbox" bind:checked={row.incluida} aria-label="Incluir partida {row.partida}" />
+							<span style="font-size: 0.75rem; color: var(--color-text-muted); width: 2.2rem;">#{row.partida}</span>
+							<input type="number" class="input" min="1" step="1" style="width: 4.5rem;" bind:value={row.cantidad} disabled={!row.incluida} aria-label="Cantidad" />
+							<span style="flex: 1; min-width: 0; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{row.descripcion}</span>
+						</div>
+					{/each}
+					<p class="hint" style="margin: 0.4rem 0;">Partidas incluidas: <strong>{remSelCount}</strong> de {remRows.length}</p>
+					<div class="grid-2" style="margin-bottom: 0;">
+						<button class="btn btn-secondary btn-block" on:click={cancelarCrearRemision} disabled={remBusy}>❌ Cancelar</button>
+						<button class="btn btn-primary btn-block" on:click={crearRemision} disabled={remBusy || remSelCount === 0}>
+							{remBusy ? 'Creando…' : '🧾 Crear remisión'}
+						</button>
+					</div>
+				</div>
+			{:else}
+				{#if rems.length === 0}
+					<p class="hint">Sin remisiones generadas aún.</p>
+				{:else}
+					<div class="list">
+						{#each rems as r (r.id)}
+							<div class="list-card" style="cursor: default; display: block;">
+								<div style="display: flex; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;">
+									<div style="min-width: 0;">
+										<div style="font-weight: 700; font-size: 0.9rem;">{r.folio}</div>
+										<div class="hint">Creado por: {r.creado_por} · {r.fecha}</div>
+										{#if r.firmada}
+											<div class="hint">✅ Firmada {r.fecha_firma}</div>
+										{:else if r.asignado_nombre}
+											<div class="hint">✍️ Firmará: <strong>{r.asignado_nombre}</strong></div>
+										{:else}
+											<div class="hint">👤 Sin asignar (Field)</div>
+										{/if}
+									</div>
+									<div style="display: flex; gap: 0.35rem; flex-shrink: 0; align-items: flex-start;">
+										<button class="btn btn-sm btn-secondary" on:click={() => descargarRemisionPdf(r)} disabled={remBusy} title="Descargar PDF">📥</button>
+										<button class="btn btn-sm btn-secondary" on:click={() => abrirAsignar(r)} disabled={remBusy} title="Asignar usuario para firmar en Field">👤</button>
+										<button class="btn btn-sm btn-danger" on:click={() => borrarRemision(r)} disabled={remBusy} title="Eliminar remisión">🗑️</button>
+									</div>
+								</div>
+								{#if asignandoId === r.id}
+									<div style="display: flex; gap: 0.4rem; margin-top: 0.5rem; align-items: center;">
+										<select class="input" bind:value={asignSel} style="flex: 1;" aria-label="Usuario para firma">
+											<option value="">-- Sin asignar --</option>
+											{#each usuarios as u (u.id)}
+												<option value={String(u.id)}>{u.nombre} ({u.email})</option>
+											{/each}
+										</select>
+										<button class="btn btn-sm btn-primary" on:click={() => guardarAsignar(r)} disabled={remBusy}>💾</button>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+				<button class="btn btn-primary btn-block" style="margin-top: 0.6rem;" on:click={abrirCrearRemision} disabled={bloqueado || pendiente || remBusy || items.length === 0}>
+					➕ Nueva remisión
+				</button>
+				{#if pendiente}
+					<p class="hint" style="margin-top: 0.35rem;">⏳ Se habilita al sincronizar la cotización (necesita folio real).</p>
+				{/if}
+			{/if}
 		</div>
 
 		{#if error}

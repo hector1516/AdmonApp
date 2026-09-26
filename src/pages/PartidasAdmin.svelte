@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { header, partidas, partidaAdd, partidaUpdate, partidaDelete } from '$lib/cotizacionesApi.js';
+	import { header, partidas, partidaAdd, partidaUpdate, partidaDelete, satSugerir } from '$lib/cotizacionesApi.js';
 	import { fmtMXN, ventaUnit, totales, folioFmt } from '$lib/cotizaciones.js';
 
 	let { clave } = $props();
@@ -24,6 +24,11 @@
 	let proveedor = $state('');
 	let tiempoEntrega = $state(1);
 	let descripcion = $state('');
+	// Códigos SAT CFDI 4.0 (vacío = el servidor los resuelve solo al guardar)
+	let satProd = $state('');
+	let satUnidad = $state('');
+	let satInfo = $state('');
+	let satBusy = $state(false);
 
 	function tieneAcceso() {
 		try {
@@ -75,6 +80,9 @@
 		proveedor = '';
 		tiempoEntrega = 1;
 		descripcion = '';
+		satProd = '';
+		satUnidad = '';
+		satInfo = '';
 	}
 
 	function seleccionar(p) {
@@ -87,6 +95,9 @@
 		proveedor = p.proveedor || '';
 		tiempoEntrega = p.tiempo_entrega ?? 0;
 		descripcion = p.descripcion || '';
+		satProd = p.sat_prod_serv || '';
+		satUnidad = p.sat_unidad || '';
+		satInfo = p.sat_fuente ? `Guardado (fuente: ${p.sat_fuente})` : '';
 		msg = '';
 		error = '';
 	}
@@ -100,8 +111,38 @@
 			proveedor,
 			tiempo_entrega: parseInt(tiempoEntrega, 10) || 0,
 			dolar: 0,
-			flete: parseFloat(flete) || 0
+			flete: parseFloat(flete) || 0,
+			sat_prod_serv: satProd.trim(),
+			sat_unidad: satUnidad.trim()
 		};
+	}
+
+	// Botón 🤖: resuelve códigos SAT de la descripción en vivo (índice →
+	// reglas locales → 1 llamada IA) sin guardar la partida.
+	async function onSugerirSat() {
+		error = '';
+		msg = '';
+		if (!descripcion.trim()) {
+			error = 'Escribe primero la descripción de la partida.';
+			return;
+		}
+		satBusy = true;
+		try {
+			const s = await satSugerir(descripcion);
+			if (s) {
+				satProd = s.clave_prod_serv || '';
+				satUnidad = s.clave_unidad || '';
+				const origen = { indice: 'índice local', reglas: 'reglas locales', ia: 'IA Gemini' }[s.origen] || s.fuente;
+				satInfo = `Sugerido por ${origen}${s.razon ? ` · ${s.razon}` : ''}`;
+			} else {
+				satInfo = '';
+				msg = '⚠️ Sin sugerencia (sin API key de IA o descripción muy corta). Captura los códigos manualmente.';
+			}
+		} catch (e) {
+			error = e.message || 'No se pudo consultar la sugerencia SAT.';
+		} finally {
+			satBusy = false;
+		}
 	}
 
 	async function onGuardar() {
@@ -183,6 +224,12 @@
 								<div style="font-size: 0.75rem; color: var(--color-text-muted);">
 									${Number(p.precio_compra).toFixed(2)} × (1+{p.factor}){p.flete ? ` + flete $${Number(p.flete).toFixed(2)}` : ''}
 								</div>
+								{#if p.sat_prod_serv}
+									<div style="font-size: 0.7rem; color: var(--color-text-muted);">
+										🧾 SAT: {p.sat_prod_serv}{p.sat_unidad ? ` · ${p.sat_unidad}` : ''}
+										{#if p.sat_fuente}· {p.sat_fuente}{/if}
+									</div>
+								{/if}
 							</div>
 							<div style="font-weight: 700; color: var(--color-primary-light); flex-shrink: 0;">{fmtMXN(p.total_venta)}</div>
 						</button>
@@ -238,6 +285,24 @@
 					<label for="pa-desc">Descripción de la partida:</label>
 					<textarea id="pa-desc" class="input" rows="2" placeholder="Descripción detallada del material…" bind:value={descripcion}></textarea>
 				</div>
+
+				<div class="grid-2">
+					<div class="field">
+						<label for="pa-satprod">Clave producto SAT (8 dígitos):</label>
+						<input id="pa-satprod" class="input" placeholder="Ej. 84039000" maxlength="8" bind:value={satProd} />
+					</div>
+					<div class="field">
+						<label for="pa-satuni">Clave unidad SAT:</label>
+						<input id="pa-satuni" class="input" placeholder="Ej. H87" maxlength="3" bind:value={satUnidad} />
+					</div>
+				</div>
+				<button class="btn btn-secondary btn-block" on:click={onSugerirSat} disabled={satBusy || busy || !descripcion.trim()}>
+					{satBusy ? 'Consultando…' : '🤖 Sugerir SAT por descripción'}
+				</button>
+				{#if satInfo}
+					<p class="hint" style="margin-top: 0.35rem;">🧾 {satInfo}</p>
+				{/if}
+				<p class="hint">Déjalos vacíos y al guardar el servidor los resuelve solo (índice → reglas → IA).</p>
 
 				<p style="font-weight: 600;">
 					💰 Venta unitario: <span style="color: var(--color-primary-light);">{fmtMXN(ventaPreview)}</span>

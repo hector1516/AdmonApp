@@ -298,7 +298,10 @@ export async function partidaAdd(folioKey, item) {
 		proveedor: (item.proveedor || '').trim(),
 		tiempo_entrega: parseInt(item.tiempo_entrega, 10) || 0,
 		dolar: parseFloat(item.dolar) || 0,
-		flete: parseFloat(item.flete) || 0
+		flete: parseFloat(item.flete) || 0,
+		// Códigos SAT (vacío = el servidor los resuelve solo: índice → reglas → IA)
+		sat_prod_serv: (item.sat_prod_serv || '').trim(),
+		sat_unidad: (item.sat_unidad || '').trim()
 	};
 	if (isOnline() && row.folio != null) {
 		try {
@@ -330,7 +333,10 @@ export async function partidaUpdate(folioKey, partidaNum, item) {
 		proveedor: (item.proveedor || '').trim(),
 		tiempo_entrega: parseInt(item.tiempo_entrega, 10) || 0,
 		dolar: parseFloat(item.dolar) || 0,
-		flete: parseFloat(item.flete) || 0
+		flete: parseFloat(item.flete) || 0,
+		// Códigos SAT (vacío = el servidor re-resuelve si cambió la descripción)
+		sat_prod_serv: (item.sat_prod_serv || '').trim(),
+		sat_unidad: (item.sat_unidad || '').trim()
 	};
 	const key = folioKeyOf(row);
 	if (isOnline() && row.folio != null) {
@@ -424,4 +430,55 @@ export async function clienteContactos(idCliente) {
 	}
 	// Offline (o sin respuesta): últimos contactos cacheados de este cliente.
 	return (await cacheGet(key)) || [];
+}
+
+// ---- SAT CFDI 4.0 (migración 0037: HUB_SatArticulos / HUB_PartidasSat) ----
+
+export async function satSugerir(descripcion) {
+	const r = await req('POST', '/api/sat/sugerir', { descripcion: descripcion || '' });
+	return r.sugerencia || null;
+}
+
+// ---- Remisiones (port del módulo del HUB; tablas IndiceRemisiones/RemisionPartidas) ----
+
+export async function remisiones(folio) {
+	return req('GET', `/api/cotizaciones/${folio}/remisiones`);
+}
+
+export async function remisionCrear(folio, partidas) {
+	return req('POST', `/api/cotizaciones/${folio}/remisiones`, { partidas });
+}
+
+export async function remisionBorrar(id) {
+	return req('DELETE', `/api/remisiones/${id}`);
+}
+
+export async function remisionAsignar(id, idUsuario) {
+	return req('PUT', `/api/remisiones/${id}/asignar`, { id_usuario: idUsuario });
+}
+
+export async function remisionUsuarios() {
+	return req('GET', '/api/remisiones/usuarios');
+}
+
+export async function remisionPdfDownload(id, folioRm) {
+	const res = await fetch(`/api/remisiones/${id}/pdf`, { headers: auth.authHeader() });
+	if (res.status === 401 || res.status === 403) {
+		auth.logout();
+		navigate('/login', { replace: true });
+		throw new Error('Sesión expirada');
+	}
+	if (!res.ok) {
+		const d = await res.json().catch(() => ({}));
+		throw new Error(d.detail || 'No se pudo generar el PDF.');
+	}
+	const blob = await res.blob();
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = `${folioRm || 'remision'}.pdf`;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	setTimeout(() => URL.revokeObjectURL(url), 10000);
 }

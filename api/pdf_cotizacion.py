@@ -174,7 +174,15 @@ def build_cotizacion_pdf(header: dict, partidas: list) -> bytes:
         subtotal_general += total_item
         desc_clean = str(item.get("descripcion") or "").replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
         diass_suffix = " Dia Laboral" if delivery_days == 1 else " Dias Laborales"
-        desc_full = f"{desc_clean}<br/><font color='#64748B'>Tiempo entrega: {delivery_days}{diass_suffix}</font>"
+        # Códigos SAT junto al tiempo de entrega, mismo estilo/tamaño/color
+        # gris (PlanesFuturos.md §1); solo se imprime lo que exista.
+        sat_extra = ""
+        if item.get("sat_prod_serv"):
+            sat_extra = f" · SAT: {item['sat_prod_serv']}"
+            if item.get("sat_unidad"):
+                sat_extra += f" · Unidad: {item['sat_unidad']}"
+        desc_full = (f"{desc_clean}<br/><font color='#64748B'>"
+                     f"Tiempo entrega: {delivery_days}{diass_suffix}{sat_extra}</font>")
         items_data.append([
             Paragraph(partida_num, style_item_desc),
             Paragraph(cantidad_num, style_item_desc),
