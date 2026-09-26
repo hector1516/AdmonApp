@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import { api } from '$lib/api.js';
 	import { passkeySupported, registerPasskey, randomDeviceName } from '$lib/passkey.js';
 
 	// --- Passkeys (estilo Field) ---
@@ -91,15 +92,14 @@
 			canInstall = true;
 		});
 		try {
-			const res = await fetch('/api/dispositivo/ip', { headers: auth.authHeader() });
-			devIp = res.ok ? (await res.json()).ip || '?' : 'sin conexión';
+			// IP con caché offline
+			devIp = (await api.get('/dispositivo/ip')).ip || '?';
 		} catch {
 			devIp = 'sin conexión';
 		}
 		if (isAdmin) {
 			try {
-				const res = await fetch('/api/users', { headers: auth.authHeader() });
-				if (res.ok) avUsers = await res.json();
+				avUsers = (await api.get('/users')) || [];
 			} catch {}
 		}
 	});
@@ -117,8 +117,8 @@
 
 	async function loadKeys() {
 		try {
-			const res = await fetch('/api/passkeys/mine', { headers: auth.authHeader() });
-			if (res.ok) myKeys = (await res.json()).passkeys || [];
+			// Passkeys con caché offline
+			myKeys = ((await api.get('/passkeys/mine')) || {}).passkeys || [];
 		} catch {
 			/* sin passkeys visibles: se queda la lista vacía */
 		}

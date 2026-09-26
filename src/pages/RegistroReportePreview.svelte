@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import { api } from '$lib/api.js';
 
 	// Página completa de previsualización PDF (pantalla completa, sin header extra)
 	let { id } = $props();
@@ -28,25 +29,27 @@
 	async function cargar() {
 		loading = true;
 		error = '';
+		// Detalle con caché offline (red primero, fallback a caché local)
 		try {
-			const [rRes, pdfRes] = await Promise.all([
-				fetch(`/api/reportes/${idReporte}`, { headers: auth.authHeader() }),
-				fetch(`/api/reportes/${idReporte}/pdf?token=${encodeURIComponent(auth.getToken())}`, { headers: auth.authHeader() })
-			]);
-			const r = await rRes.json().catch(() => ({}));
-			if (!rRes.ok) throw new Error(r.detail || 'Error al cargar reporte.');
-			reporte = r;
+			reporte = await api.get(`/reportes/${idReporte}`);
+		} catch (e) {
+			error = e.message === 'Sesión expirada' ? e.message : `Error: ${e.message}`;
+			loading = false;
+			return;
+		}
+		// PDF: binario que requiere red (no se cachea en IndexedDB)
+		try {
+			const pdfRes = await fetch(`/api/reportes/${idReporte}/pdf?token=${encodeURIComponent(auth.getToken())}`, { headers: auth.authHeader() });
 			if (pdfRes.ok) {
 				pdfBlob = await pdfRes.blob();
 			} else {
 				const d = await pdfRes.json().catch(() => ({}));
 				error = d.detail || 'No se pudo generar el PDF.';
 			}
-		} catch (e) {
-			error = e.message === 'Sesión expirada' ? e.message : `Error: ${e.message}`;
-		} finally {
-			loading = false;
+		} catch {
+			error = '📴 Sin conexión: el PDF necesita red (los datos del reporte sí están disponibles offline).';
 		}
+		loading = false;
 	}
 
 	onMount(async () => {

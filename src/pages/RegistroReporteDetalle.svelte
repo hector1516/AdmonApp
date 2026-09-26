@@ -3,6 +3,7 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { online } from '$lib/stores/online.js';
+	import { api } from '$lib/api.js';
 
 	// Detalle completo de reporte (pantalla completa, sin modales)
 	// Permiso: acceso_registro_reportes
@@ -47,25 +48,32 @@
 		loading = true;
 		error = '';
 		try {
-			const res = await fetch(`/api/reportes/${idReporte}`, { headers: auth.authHeader() });
-			const data = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(data.detail || 'Error al cargar.');
-			reporte = data;
+			// Detalle con caché offline (red primero, fallback a caché local)
+			reporte = await api.get(`/reportes/${idReporte}`);
 
-			// Cargar fotos
-			const fRes = await fetch(`/api/reportes/${idReporte}/fotos`, { headers: auth.authHeader() });
-			const fotos = fRes.ok ? await fRes.json() : [];
-			reporte._fotos = fotos || [];
+			// Fotos: si no hay red ni caché quedan vacías (se cachean la
+			// primera vez que se abre el detalle con conexión)
+			try {
+				reporte._fotos = (await api.get(`/reportes/${idReporte}/fotos`)) || [];
+			} catch {
+				reporte._fotos = [];
+			}
 
-			// Cargar técnicos adicionales
-			const tRes = await fetch(`/api/reportes/${idReporte}/tecnicos`, { headers: auth.authHeader() });
-			const tecnicos = tRes.ok ? await tRes.json() : [];
-			reporte._tecnicos_adicionales = tecnicos.filter(t => t !== reporte.Tecnico);
+			// Técnicos adicionales del reporte
+			try {
+				const tecnicos = (await api.get(`/reportes/${idReporte}/tecnicos`)) || [];
+				reporte._tecnicos_adicionales = tecnicos.filter(t => t !== reporte.Tecnico);
+			} catch {
+				reporte._tecnicos_adicionales = [];
+			}
 
-			// Cargar técnicos para select de edición
-			const uRes = await fetch('/api/usuarios', { headers: auth.authHeader() });
-			const usuarios = uRes.ok ? await uRes.json() : [];
-			tecnicosHub = usuarios.filter(u => u.Activo === 1).map(u => u.Nombre);
+			// Catálogo de técnicos para el select de edición
+			try {
+				const usuarios = (await api.get('/usuarios')) || [];
+				tecnicosHub = usuarios.filter(u => u.Activo === 1).map(u => u.Nombre);
+			} catch {
+				tecnicosHub = [];
+			}
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : `Error: ${e.message}`;
 		} finally {

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import { api } from '$lib/api.js';
 
 	// ECCSA IA (Edwin Jarvis) - CLON EXACTO del HUB views/edwin_jarvis.py
 	// Disponible para TODOS los usuarios logueados (sin permiso especial)
@@ -23,10 +24,8 @@
 
 	async function cargarConversaciones() {
 		try {
-			const res = await fetch('/api/ia/conversaciones', { headers: auth.authHeader() });
-			const data = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(data.detail || 'Error al cargar conversaciones.');
-			conversaciones = data || [];
+			// Lista con caché offline (prefetch: conversaciones + mensajes)
+			conversaciones = (await api.get('/ia/conversaciones')) || [];
 			// Auto-seleccionar la más reciente si no hay seleccionada
 			if (!conversacionActual && conversaciones.length > 0) {
 				await seleccionarConversacion(conversaciones[0].Id);
@@ -42,10 +41,8 @@
 		loadingMsg = true;
 		error = '';
 		try {
-			const res = await fetch(`/api/ia/conversaciones/${id}/mensajes`, { headers: auth.authHeader() });
-			const data = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(data.detail || 'Error al cargar mensajes.');
-			mensajes = data || [];
+			// Mensajes con caché offline (prefetch de los últimos 10)
+			mensajes = (await api.get(`/ia/conversaciones/${id}/mensajes`)) || [];
 			conversacionActual = conversaciones.find(c => c.Id === id) || null;
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : 'No se pudo cargar mensajes.';

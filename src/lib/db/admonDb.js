@@ -21,4 +21,11 @@ db.version(2).stores({
 	legendsCache: 'id, ts'
 });
 
+// v3: caché offline GENÉRICA de lecturas GET por path de API (`/api/...`).
+// Alimentada por api.get (red primero, luego guarda) y por el prefetch de
+// arranque que precarga los últimos 10 registros + detalles de cada módulo.
+db.version(3).stores({
+	offlineCache: 'key, ts'
+});
+
 export default db;

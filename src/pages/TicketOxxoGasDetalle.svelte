@@ -13,6 +13,7 @@
 	let t = $state(null);
 	let loading = $state(true);
 	let error = $state('');
+	let imgError = $state(false); // offline o imagen no disponible
 
 	function tieneAcceso() {
 		try {
@@ -79,8 +80,10 @@
 	{:else if t}
 		<div class="grid">
 			<div class="img-box">
-				{#if t.tiene_foto}
-					<img src={imgUrl(t, 0)} alt="Ticket {t.folio}" />
+				{#if t.tiene_foto && !imgError}
+					<img src={imgUrl(t, 0)} alt="Ticket {t.folio}" onerror={() => (imgError = true)} />
+				{:else if t.tiene_foto}
+					<div class="no-photo">📴<span>Foto no disponible sin conexión</span></div>
 				{:else}
 					<div class="no-photo">🎫<span>Sin foto registrada</span></div>
 				{/if}

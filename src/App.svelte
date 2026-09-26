@@ -5,6 +5,7 @@
 	import { onlinePing } from '$lib/stores/online.js';
 	import SyncHeader from './components/SyncHeader.svelte';
 	import { syncPull, syncPush } from '$lib/sync.js';
+	import { prefetchOffline } from '$lib/offlinePrefetch.js';
 	import Login from './pages/Login.svelte';
 	import Dashboard from './pages/Dashboard.svelte';
 	import Cotizaciones from './pages/Cotizaciones.svelte';
@@ -64,6 +65,14 @@
 		if (auth.isLoggedIn()) {
 			syncPull().then(() => syncPush()).catch(() => {});
 		}
+	});
+
+	// Prefetch offline: en cuanto hay sesión (login por contraseña/passkey o
+	// restauración al cargar) se precargan los últimos 10 registros + detalles
+	// de cada módulo a IndexedDB. Throttle interno de 5 min + disparo propio
+	// al recuperar la conexión (ver offlinePrefetch.js).
+	$effect(() => {
+		if ($auth.user) prefetchOffline();
 	});
 
 </script>

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import { api } from '$lib/api.js';
 	import PasswordInput from '../components/PasswordInput.svelte';
 
 	// id viene de la ruta /usuarios/:id (micro-router, modo runes -> $props)
@@ -104,32 +105,22 @@
 			return;
 		}
 		try {
-			const res = await fetch(`/api/users/${id}`, { headers: auth.authHeader() });
-			if (res.ok) {
-				const d = await res.json();
-				nombre = d.nombre || '';
-				email = d.email || '';
-				curpRfc = d.curp_rfc || '';
-				password = d.password || '';
-				fechaIngreso = d.fecha_ingreso || '';
-				activo = !!d.activo;
-				const a = {};
-				for (const g of Object.values(PERM_GROUPS)) for (const [k] of g) a[k] = !!d[k];
-				accesos = a;
-				isSelf = (email || '').trim().toLowerCase() === myEmail();
-			} else if (res.status === 401 || res.status === 403) {
-				auth.logout();
-				navigate('/login', { replace: true });
-			} else {
-				let detalle = '';
-				try {
-					detalle = (await res.text()).slice(0, 160);
-				} catch {}
-				error = `Error del servidor (${res.status}) ${detalle}`;
-			}
+			// GET con caché offline: red primero, si no hay red sirve el
+			// detalle cacheado por el prefetch (últimos 10 usuarios).
+			const d = await api.get(`/users/${id}`);
+			nombre = d.nombre || '';
+			email = d.email || '';
+			curpRfc = d.curp_rfc || '';
+			password = d.password || '';
+			fechaIngreso = d.fecha_ingreso || '';
+			activo = !!d.activo;
+			const a = {};
+			for (const g of Object.values(PERM_GROUPS)) for (const [k] of g) a[k] = !!d[k];
+			accesos = a;
+			isSelf = (email || '').trim().toLowerCase() === myEmail();
 		} catch (e) {
 			console.error('Error cargando usuario:', e);
-			error = `No se pudo conectar (${e.name || 'fetch'}): ${e.message || 'sin detalle'}`;
+			error = e.message === 'Sesión expirada' ? e.message : `No se pudo cargar: ${e.message || 'sin detalle'}`;
 		} finally {
 			loading = false;
 		}

@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import { api } from '$lib/api.js';
 
 	let usuarios = $state([]);
 	let loading = $state(true);
@@ -27,22 +28,15 @@
 			return;
 		}
 		try {
-			const res = await fetch('/api/users', { headers: auth.authHeader() });
-			if (res.ok) {
-				usuarios = await res.json();
-			} else if (res.status === 401 || res.status === 403) {
-				auth.logout();
-				navigate('/login', { replace: true });
-			} else {
-				let detalle = '';
-				try {
-					detalle = (await res.text()).slice(0, 160);
-				} catch {}
-				error = `Error del servidor (${res.status}) ${detalle}`;
-			}
+			// GET con caché offline: red primero, si no hay red sirve los
+			// últimos usuarios cacheados por el prefetch.
+			usuarios = (await api.get('/users')) || [];
 		} catch (e) {
-			console.error('Error cargando usuarios:', e);
-			error = `No se pudo conectar (${e.name || 'fetch'}): ${e.message || 'sin detalle'}`;
+			if (e.message === 'Sesión expirada') {
+				error = e.message;
+			} else {
+				error = e.message || 'No se pudo cargar. Revisa tu conexión.';
+			}
 		} finally {
 			loading = false;
 		}

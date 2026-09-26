@@ -4,6 +4,7 @@ import { auth } from './stores/auth.js';
 import { online } from './stores/online.js';
 import { navigate } from './router.js';
 import { uuid } from './cotizaciones.js';
+import { cachePut, cacheGet } from './offline.js';
 
 // API online-first con caché Dexie + cola offline (outbox estilo Field).
 // - Lecturas: red -> actualiza caché -> devuelve mezclado (servidor + pendientes).
@@ -383,7 +384,14 @@ export async function clientes() {
 			if (!isNetworkError(e)) throw e;
 		}
 	}
-	return db.clientes.toArray();
+	let local = await db.clientes.toArray();
+	if (local.length === 0) {
+		// Primera visita sin red (Dexie vacío): usa la caché genérica que
+		// alimenta el prefetch offline de arranque (offlineCache).
+		const cached = await cacheGet('/api/clientes');
+		if (Array.isArray(cached)) return cached;
+	}
+	return local;
 }
 
 export async function clienteNombre(idCliente) {
@@ -403,10 +411,17 @@ export async function clienteNombre(idCliente) {
 
 export async function clienteContactos(idCliente) {
 	const idc = (idCliente || '').trim().toUpperCase();
-	if (!idc || !isOnline()) return [];
-	try {
-		return await req('GET', `/api/clientes/${idc}/contactos`);
-	} catch {
-		return [];
+	if (!idc) return [];
+	const key = `/api/clientes/${idc}/contactos`;
+	if (isOnline()) {
+		try {
+			const rows = await req('GET', key);
+			await cachePut(key, rows);
+			return rows;
+		} catch {
+			// error HTTP o de red: se intenta la caché local debajo
+		}
 	}
+	// Offline (o sin respuesta): últimos contactos cacheados de este cliente.
+	return (await cacheGet(key)) || [];
 }

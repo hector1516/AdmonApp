@@ -3,6 +3,7 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { online } from '$lib/stores/online.js';
+	import { api } from '$lib/api.js';
 
 	// REGISTRO DE REPORTES (Admin) — clon del HUB views/registro_reportes.py
 	// Lista global con pestañas: Firmados / Papelera (eliminados)
@@ -56,10 +57,9 @@
 		try {
 			const params = new URLSearchParams();
 			if (tab === 'papelera') params.set('eliminados', 'true');
-			const res = await fetch(`/api/reportes?${params}`, { headers: auth.authHeader() });
-			const data = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error(data.detail || 'Error al cargar.');
-			lista = data || [];
+			// Lista con caché offline: red primero; sin red sirve la última
+			// lista cacheada por el prefetch (mismo path/llave `?`).
+			lista = (await api.get(`/reportes?${params}`)) || [];
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : 'No se pudo cargar. Revisa tu conexión.';
 		} finally {

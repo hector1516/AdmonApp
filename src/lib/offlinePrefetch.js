@@ -1,0 +1,99 @@
+import { api } from './api.js';
+
+// Prefetch offline de arranque: garantiza al menos los ÚLTIMOS 10 REGISTROS
+// de cada módulo (lista + sus detalles) en IndexedDB para navegar sin red.
+//
+// Cómo funciona:
+// - Por módulo se define la llave exacta de su LISTA (mismo path que pide la
+//   página, para que el fallback offline la encuentre) y cómo derivar los
+//   DETALLES de los primeros 10 ítems.
+// - api.get cachea cada respuesta; si no hay red o no hay permiso (403) se
+//   continúa con el siguiente módulo — cada quien cachea lo que puede ver.
+// - Se dispara: al cargar la app con sesión (App.svelte -> $effect) y al
+//   recuperar la conexión (evento 'online'), con throttle de 5 minutos.
+// - Las fotos de reportes NO se prefetchan (pesadas, MBs); quedan cacheadas
+//   de forma oportunista la primera vez que el usuario abre un detalle.
+
+const LIMIT = 10;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const MODULES = [
+	// 👥 Usuarios: lista + detalle completo (permisos) de los 10 primeros
+	{ list: '/users', details: (l) => (l || []).slice(0, LIMIT).map((u) => `/users/${u.id}`) },
+	// 📇 Clientes: la lista ya vive en Dexie (cotizacionesApi); aquí los
+	// contactos de los 10 primeros, que ClienteDetalle necesita offline.
+	{ list: '/clientes', details: (l) => (l || []).slice(0, LIMIT).map((c) => `/clientes/${c.id_cliente}/contactos`) },
+	// 📋 Reportes: lista por defecto (misma llave `?` que arma la página,
+	// recientes primero) + detalle y técnicos de los 10 primeros.
+	{
+		list: '/reportes?',
+		details: (l) =>
+			(l || []).slice(0, LIMIT).flatMap((r) => [`/reportes/${r.IdReporte}`, `/reportes/${r.IdReporte}/tecnicos`])
+	},
+	// 🧑‍🔧 Catálogo de usuarios para los selects de reporte
+	{ list: '/usuarios' },
+	// ⛽ Tickets OxxoGas: la lista YA trae todos los campos del detalle
+	// (folio, factura, estación, cliente, vehículo…); solo falta la imagen,
+	// que se muestra con fallback si no hay red.
+	{ list: '/tickets-oxxogas' },
+	// 🤖 ECCSA IA: conversaciones (máx 10 por usuario) + sus mensajes
+	{
+		list: '/ia/conversaciones',
+		details: (l) => (l || []).slice(0, LIMIT).map((c) => `/ia/conversaciones/${c.Id}/mensajes`)
+	},
+	// ⚙️ Configuración (liviana)
+	{ list: '/dispositivo/ip' },
+	{ list: '/passkeys/mine' },
+	// 🏆 ECCSA Legends: sus endpoints livianos (la página además tiene su
+	// propia caché legendsCache; esto garantiza datos aunque nunca se abra)
+	{ list: '/legends/score' },
+	{ list: '/legends/avatar' },
+	{ list: '/legends/ranking' },
+	{ list: '/legends/weekly-winner' },
+	{ list: '/legends/winners' },
+	{ list: '/legends/celebrations' },
+	{ list: '/legends/score-log' }
+];
+
+let lastRun = 0;
+let running = false;
+
+export async function prefetchOffline({ force = false } = {}) {
+	// Guardas: una sola corrida a la vez, con sesión, con red y con throttle.
+	if (running) return;
+	if (!localStorage.getItem('admon_token')) return;
+	if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+	if (!force && Date.now() - lastRun < 5 * 60 * 1000) return;
+	running = true;
+	lastRun = Date.now();
+	try {
+		for (const mod of MODULES) {
+			// Si la sesión expiró en medio del prefetch, detenerse.
+			if (!localStorage.getItem('admon_token')) break;
+			try {
+				const list = await api.get(mod.list); // la lista ya queda cacheada
+				const details = mod.details ? mod.details(list).slice(0, LIMIT * 3) : [];
+				for (const p of details) {
+					if (!localStorage.getItem('admon_token')) break;
+					try {
+						await api.get(p);
+					} catch {
+						// 403 sin permiso o detalle inexistente: seguir
+					}
+					await sleep(60); // no saturar la red ni al backend
+				}
+			} catch {
+				// lista sin permiso (403) u offline: siguiente módulo
+			}
+			await sleep(120);
+		}
+	} finally {
+		running = false;
+	}
+}
+
+// Auto-disparo: al cargar (App.svelte también lo llama vía $effect cuando
+// hay sesión) y al recuperar la conexión.
+if (typeof window !== 'undefined') {
+	window.addEventListener('online', () => prefetchOffline({ force: true }));
+}
