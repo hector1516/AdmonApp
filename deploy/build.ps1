@@ -126,7 +126,11 @@ foreach ($p in $c.HostConfig.PortBindings.PSObject.Properties) {
 }
 foreach ($e in @($c.Config.Env)) { if ($e) { $runArgs += @('-e', $e) } }
 $runArgs += "${image}:latest"
-Log (" recrear: " + ($runArgs -join ' '))
+# Oculta los secretos: el log se lee en pantalla y a veces se comparte.
+$logArgs = $runArgs | ForEach-Object {
+    if ($_ -match '^(.*(PASSWORD|SECRET|TOKEN|API_KEY)=)(.*)$') { $Matches[1] + '****' } else { $_ }
+}
+Log (" recrear: " + ($logArgs -join ' '))
 
 # stop con verificación: el timeout del cliente no significa que no se aplicó
 Log 'stop del contenedor actual (t=5)'
