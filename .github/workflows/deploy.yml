@@ -105,46 +105,47 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $before = '${{{{ github.event.before }}}}'
-          $after  = '${{{{ github.event.after }}}}'
+          $before = '${{ github.event.before }}'
+          $after  = '${{ github.event.after }}'
           $salida = $env:GITHUB_OUTPUT
 
-          if ([string]::IsNullOrEmpty($before) -or $before -eq '0' * 40) {{
-            Write-Output "primer push: rebuild (no hay contra qué comparar)"
-            "modo=rebuild"   | Out-File -FilePath $salida -Append -Encoding utf8
+          if ([string]::IsNullOrEmpty($before) -or $before -eq ('0' * 40)) {
+            Write-Output "primer push: rebuild (no hay contra que comparar)"
+            "modo=rebuild" | Out-File -FilePath $salida -Append -Encoding utf8
             "motivo=sin referencia previa" | Out-File -FilePath $salida -Append -Encoding utf8
             exit 0
-          }}
+          }
 
           $changed = @(git diff --name-only $before $after 2>$null)
-          Write-Output "Cambios entre ${{ '{' }}$before{ '}' }} y $after : $($changed.Count)"
-          $changed | ForEach-Object {{ "  $_" }}
+          Write-Output "Cambios en este push: $($changed.Count)"
+          $changed | ForEach-Object { "  $_" }
 
-          # Lo que de verdad cambia la imagen. Todo lo demás (frontend, panel,
-          # estáticos) se publica copiando al contenedor, sin docker build.
+          # Lo que de verdad cambia la imagen. El resto (frontend, panel,
+          # estaticos) se publica copiando al contenedor que ya corre, sin
+          # docker build.
           $imagen = @("Dockerfile", "requirements.txt", "api/requirements.txt")
-          $tocaba = $changed | Where-Object {{
+          $tocaba = $changed | Where-Object {
             $f = $_
-            $imagen | Where-Object {{ $f -eq $_ -or $f -like "$_/*" }}
-          }}
+            $imagen | Where-Object { $f -eq $_ -or $f -like "$_/*" }
+          }
 
-          if ($tocaba) {{
+          if ($tocaba) {
             Write-Output "modo=REBUILD: cambiaron $($tocaba -join ', ')"
             "modo=rebuild" | Out-File -FilePath $salida -Append -Encoding utf8
             "motivo=cambio un insumo de la imagen" | Out-File -FilePath $salida -Append -Encoding utf8
-          }} else {{
+          } else {
             Write-Output "modo=HOTSYNC: sin rebuild"
             "modo=hotsync" | Out-File -FilePath $salida -Append -Encoding utf8
             "motivo=solo cambio codigo y estaticos" | Out-File -FilePath $salida -Append -Encoding utf8
-          }}
+          }
 
       - name: Resumen
         shell: pwsh
         run: |
-          "### Deploy de Admon" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **modo**: ${{ steps.gate.outputs.modo }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **por qué**: ${{ steps.gate.outputs.motivo }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **commit**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          "### Deploy de Admon" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- **modo**: ${{ steps.gate.outputs.modo }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- **por que**: ${{ steps.gate.outputs.motivo }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- **commit**: ${{ github.sha }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       # ── Camino rápido ──────────────────────────────────────────────────────
       # El paso es PowerShell, pero lo que corre es deploy/hotsync.sh con el Git
