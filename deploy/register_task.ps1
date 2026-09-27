@@ -37,7 +37,12 @@ $ErrorActionPreference = 'Stop'
 $repo     = 'C:\admon'
 $script   = Join-Path $repo 'deploy\build.ps1'
 $taskName = 'AdmonBuild'
-$user     = "$env:USERDOMAIN\$env:USERNAME"
+# OJO: en sesión SSH $env:USERDOMAIN puede venir como WORKGROUP aunque la cuenta
+# sea local, y schtasks responde "No se efectuó ninguna asignación entre los
+# nombres de cuenta y los identificadores de seguridad". La identidad de Windows
+# siempre da el nombre correcto (SERVERVM\ECCSA).
+$user     = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+if (-not $user) { $user = "$env:COMPUTERNAME\$env:USERNAME" }
 
 if (-not (Test-Path $script)) { throw "No existe $script (¿el repo está en $repo?)" }
 
