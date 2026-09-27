@@ -19,7 +19,12 @@
       renombra y arranca el anterior.
 #>
 
-$ErrorActionPreference = 'Stop'
+# 'Continue' (no 'Stop'): con 'Stop', cualquier escritura en stderr de un comando
+# nativo (npm, docker) lanza NativeCommandError y Mata el script en seco — sin
+# escribir ni el ERROR ni el FIN rc= en el log (pasó el 2026-09-27 con npm ci).
+# El script valida cada paso explícitamente con $LASTEXITCODE, que es la forma
+# correcta de detectar fallos de comandos nativos.
+$ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 $log  = Join-Path $root 'build.log'
 $image = 'hub-admon'
