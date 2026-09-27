@@ -1,11 +1,14 @@
 <script>
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import { path, navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { onlinePing } from '$lib/stores/online.js';
+	import { online, onlinePing } from '$lib/stores/online.js';
 	import SyncHeader from './components/SyncHeader.svelte';
-	import { syncPull, syncPush } from '$lib/sync.js';
+	import Changelog from './components/Changelog.svelte';
+	import { syncPull, syncPush, pendingCount, syncing, refreshPending } from '$lib/sync.js';
 	import { prefetchOffline } from '$lib/offlinePrefetch.js';
+	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
 	import Login from './pages/Login.svelte';
 	import Dashboard from './pages/Dashboard.svelte';
 	import Cotizaciones from './pages/Cotizaciones.svelte';
@@ -74,6 +77,30 @@
 		if ($auth.user) prefetchOffline();
 	});
 
+	// ── Banner común ECCSA-Shell ─────────────────────────────────────────────
+	// El componente es del shell y no sabe nada de Admon: el estado, el usuario
+	// y el clic le llegan por props, y `fetcher` le aporta la cabecera Bearer
+	// que Admon usa (antes el fetch peludo daba 401 y el 🏢/🏠 nunca se
+	// resolvía). Mismo cableado que en Field. Ver ECCSA-Shell/docs/CONTRATO.md.
+	function shellEstado() {
+		if (!get(online)) return 'offline';
+		if (get(syncing)) return 'syncing';
+		// 'pending' vs 'idle' lo decide el componente a partir de `pendientes`.
+		return 'idle';
+	}
+
+	async function shellSync() {
+		if (!get(online) || get(syncing)) return;
+		await onlinePing();
+		await syncPush();
+		refreshPending();
+	}
+
+	function shellFetch(url) {
+		const token = auth.getToken();
+		return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+	}
+
 </script>
 
 {#if !splashDone}
@@ -87,10 +114,26 @@
 	</div>
 {:else if ready}
 	{#if $auth.user}
-		<SyncHeader />
+		<SyncHeader
+			estado={shellEstado()}
+			pendientes={$pendingCount}
+			usuario={$auth.user.nombre}
+			appVersion={APP_VERSION}
+			shellVersion={SHELL_VERSION}
+			fetcher={shellFetch}
+			onsync={shellSync}
+		/>
+
+		<!-- Popup de novedades (del shell). Va UNA vez acá, en el App, para
+		     que salte aunque se entre por cualquier ruta. El texto de los
+		     cambios está en public/changelog.json, así se edita sin recompilar. -->
+		<Changelog appId="admon" appName="Admon" version={APP_VERSION}
+		           url="/changelog.json" />
 	{/if}
 
-	<div style="padding-top: {$auth.user ? 'calc(3.8rem + env(safe-area-inset-top))' : '0'}">
+	<!-- shell-below-banner: el padding para no quedar bajo el banner fijo lo
+	     pone el shell (era un 3.8rem mágico repetido en cada app). -->
+	<div class={$auth.user ? 'shell-below-banner' : ''}>
 		{#if $path === '/login'}
 			<Login />
 		{:else if $path === '/dashboard' || $path === '/'}
@@ -140,7 +183,7 @@
 		{:else}
 			<Dashboard />
 		{/if}
-		<div class="version-badge">Admon v1.0.1</div>
+		<div class="version-badge">Admon v{APP_VERSION}</div>
 	</div>
 {:else}
 	<div class="splash">

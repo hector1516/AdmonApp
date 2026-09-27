@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
+	import ActionsBar from '../components/ActionsBar.svelte';
 
 	// Menú de módulos estilo home de Field: icon/title/desc/path/perm.
 	// Solo módulos funcionales; cada tarjeta requiere su permiso activo.
@@ -51,11 +52,13 @@
 		<div class="brand-col">
 			<h1 class="brand"><img class="brand-logo" src="/admon_logo.png" alt="Admon" /> Admon</h1>
 		</div>
-		<div style="flex:1"></div>
-		<div style="display:flex;gap:0.5rem">
-			<button class="btn btn-sm btn-secondary" on:click={() => navigate('/config')} title="Configuración">⚙️</button>
-			<button class="btn btn-sm btn-secondary" on:click={handleLogout} title="Cerrar sesión">🚪 Salir</button>
-		</div>
+		<!-- Barra de acciones del shell (⚙️ config · 🚪 salir). Admon no pasa
+		     onnotif/ononline: no tiene cola de avisos ni usuarios en línea.
+		     El componente los oculta si el manejador no está. -->
+		<ActionsBar
+			onconfig={() => navigate('/config')}
+			onlogout={handleLogout}
+		/>
 	</div>
 
 	<div class="menu-grid">

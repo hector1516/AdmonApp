@@ -1,0 +1,12 @@
+{
+  "app": "admon",
+  "version": "1.1.0",
+  "cambios": [
+    "📋 Novedades: la primera vez que abras una versión nueva, esta ventanita te dice qué cambió. El botón 📋 la vuelve a abrir cuando quieras.",
+    "🏢 El banner ahora sí dice si estás en la oficina o en remoto (antes siempre mostraba 📍).",
+    "📦 La app funciona sin conexión: guarda los últimos 10 registros y los detalles de cada módulo.",
+    "🤖 Módulo de Remisiones con códigos SAT CFDI 4.0.",
+    "⛽ Tickets de OxxoGas: consulta de saldo, Go Vale y retiro de Telegram.",
+    "🚪 El botón de salir ya funciona desde cualquier página, no solo del inicio."
+  ]
+}

@@ -1,0 +1,128 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Admon · deploy automático
+#
+# La idea: no reconstruir la imagen en cada push. El gate mira QUÉ cambió y
+# decide entre dos caminos:
+#
+#   rebuild  → deploy/build.ps1 (reconstruye la imagen y recrea el contenedor,
+#              con el rollback que ya tenía). Se usa cuando el push tocó algo
+#              de la IMAGEN: Dockerfile, requirements.txt o
+#              api/requirements.txt.
+#   hotsync  → deploy/hotsync.sh (compila el frontend y lo copia al contenedor
+#              que ya corre). Se usa para todo lo demás: .svelte, .css, JS.
+#
+# El motivo: aunque el Dockerfile de Admon ya compila el frontend FUERA de la
+# imagen, reconstruirla y recrear el contenedor sigue siendo más lento que
+# copiar dist/ y api/ al contenedor que ya está corriendo.
+#
+# El runner es self-hosted en el ServerVM (el mismo de antes), porque el deploy
+# tiene que hablar con el Docker de esa máquina. OJO: un folder de runner solo
+# sirve a UN repo — si este workflow se queda en cola, es que el runner no está
+# registrado en ESTE repo.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy Admon
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Nunca dos deploys a la vez: un push mientras corre el anterior se cancela.
+concurrency:
+  group: deploy-admon
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # El hotsync solo necesita el código; con history completa el
+          # `git diff` del gate puede comparar bien contra el push anterior.
+          fetch-depth: 0
+
+      # ── El gate ────────────────────────────────────────────────────────────
+      # Un cambio en la API Python también se publica sin rebuild (docker cp),
+      # así que api/ NO obliga a reconstruir. Solo lo que de verdad cambia la
+      # imagen: Dockerfile, requirements.txt y api/requirements.txt.
+      - name: Decidir rebuild vs hotsync
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.event.after }}"
+          echo "Cambios entre $BEFORE y $AFTER:"
+
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || [ "$BEFORE" = "" ]; then
+            # Primer push o push con la referencia anterior desconocida: no se
+            # puede diffear, así que se reconstruye para partir de algoKnown.
+            echo "modo=rebuild" >> "$GITHUB_OUTPUT"
+            echo "motivo=sin referencia para comparar" >> "$GITHUB_OUTPUT"
+            echo "::notice::primer push: rebuild"
+            exit 0
+          fi
+
+          CHANGED="$(git diff --name-only "$BEFORE" "$AFTER" || true)"
+          echo "$CHANGED" | sed 's/^/  /'
+
+          # Lo que obliga a reconstruir la imagen.
+          if echo "$CHANGED" | grep -qE '^(Dockerfile|requirements\.txt|api/requirements\.txt)'; then
+            echo "modo=rebuild" >> "$GITHUB_OUTPUT"
+            echo "motivo=cambió la imagen (Dockerfile / requirements / docker/)" >> "$GITHUB_OUTPUT"
+            echo "::notice::modo REBUILD: cambió un insumo de la imagen"
+          else
+            echo "modo=hotsync" >> "$GITHUB_OUTPUT"
+            echo "motivo=solo cambió código y estáticos" >> "$GITHUB_OUTPUT"
+            echo "::notice:: modo HOTSYNC: sin rebuild"
+          fi
+
+      - name: Resumen
+        shell: bash
+        run: |
+          echo "### Deploy de Admon" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **modo**: ${{ steps.gate.outputs.modo }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **por qué**: ${{ steps.gate.outputs.motivo }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **commit**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Camino rápido ──────────────────────────────────────────────────────
+      - name: Hotsync
+        if: steps.gate.outputs.modo == 'hotsync'
+        shell: bash
+        run: bash deploy/hotsync.sh
+
+      # ── Camino completo ────────────────────────────────────────────────────
+      # El rebuild NO se corre desde el checkout del runner: build.ps1 espera el
+      # clon canónico (C:\admon) y así el contenedor se recrea con la misma
+      # configuración de siempre (puertos, red, volumes y credenciales que saca
+      # del contenedor actual con docker inspect). Se lanza la tarea ya
+      # probada, que es además el patrón del ServerVM: por SSH los hijos mueren
+      # al cerrarse la sesión, por eso esto va con schtasks.
+      - name: Rebuild
+        if: steps.gate.outputs.modo == 'rebuild'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "Lanzando AdmonBuild (schtasks)…"
+          schtasks /run /tn AdmonBuild
+          if ($LASTEXITCODE -ne 0) { throw "no se pudo lanzar AdmonBuild" }
+
+          Write-Host "Esperando a que termine (build.log)…"
+          $rc = $null
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 10
+            $log = Get-Content 'C:\admon\build.log' -ErrorAction SilentlyContinue
+            $line = $log | Select-String 'FIN rc=(\d+)' | Select-Object -Last 1
+            if ($line) {
+              $log | Select-Object -Last 25 | ForEach-Object { Write-Host $_ }
+              $rc = [int]$line.Matches[0].Groups[1].Value
+              break
+            }
+          }
+          if ($null -eq $rc) { throw "build.log no mostró 'FIN rc=' en 15 min" }
+          if ($rc -ne 0) { throw "el rebuild falló (rc=$rc) — ver C:\admon\build.log" }
+          Write-Host "OK · imagen reconstruida y contenedor recreado"

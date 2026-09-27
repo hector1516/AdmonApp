@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse, Response
 from api.pdf_cotizacion import build_cotizacion_pdf
 from api.pdf_reporte import build_service_report_pdf
 from api.pdf_remision import build_remision_pdf
+from api.lugar import lugar_de
 from api import sat_helper
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
@@ -404,34 +405,36 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
 async def shell_state(request: Request, current_user: dict = Depends(get_current_user)):
     """Estado del banner común (ECCSA-Shell · docs/CONTRATO.md).
     El cliente combina esto con su store de sync (pendientes/sincronizando);
-    aquí va lo que solo el servidor sabe: app, versiones, usuario y lugar."""
-    import ipaddress
-    app_version = "1.0.0"
-    shell_version = "?"
-    try:
-        with open(os.path.join(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))), "ECCSA_SHELL_VERSION"),
-                encoding="utf-8") as fh:
-            shell_version = fh.read().strip() or "?"
-    except OSError:
-        pass
-    # ¿oficina o remoto? misma regla que Field: IP privada = red ECCSA.
-    xff = request.headers.get("X-Forwarded-For", "")
-    ip = (xff.split(",")[0].strip() if xff else
-          (request.headers.get("X-Real-IP") or
-           (request.client.host if request.client else "")))
-    modo = "desconocido"
-    if ip:
+    aquí va lo que solo el servidor sabe: app, versiones, usuario y lugar.
+
+    Admon autentica con `Authorization: Bearer`, igual que Field, así que el
+    componente del shell necesita que la app le pase su propio `fetcher`."""
+    import json
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _lee(nombre):
         try:
-            addr = ipaddress.ip_address(ip)
-            modo = "oficina" if (addr.is_private or addr.is_loopback) else "remoto"
-        except ValueError:
-            modo = "desconocido"
+            with open(os.path.join(raiz, nombre), encoding="utf-8") as fh:
+                return fh.read().strip() or "?"
+        except OSError:
+            return "?"
+
+    # app.version = package.json (fuente única; el shell la estampa en shell.js)
+    try:
+        with open(os.path.join(raiz, "package.json"), encoding="utf-8") as fh:
+            app_version = json.load(fh).get("version", "?")
+    except (OSError, ValueError):
+        app_version = "?"
+
+    # lugar.py: X-Forwarded-For (primera entrada) → X-Real-IP → socket.
+    modo, ip = lugar_de(request.headers,
+                        request.client.host if request.client else "")
     return {
         "app": {"id": "admon", "nombre": "Admon", "version": app_version},
-        "shell": {"version": shell_version},
+        "shell": {"version": _lee("ECCSA_SHELL_VERSION")},
         "user": {"nombre": current_user.get("nombre"),
-                 "email": current_user.get("email")},
+                 "email": current_user.get("email"),
+                 "rol": "admin" if current_user.get("acceso_usuarios") else "usuario"},
         "sync": {"estado": "idle", "pendientes": 0, "ultimo": None},
         "lugar": {"modo": modo, "ip": ip},
     }
