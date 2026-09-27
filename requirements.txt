@@ -11,8 +11,10 @@
 #   python tools/check_versiones.py
 #
 # 2026-09-27: se quitaron openpyxl, altair, protobuf, pyasn1, cryptography,
-# itsdangerous, jinja2, markupsafe y python-multipart: un escaneo AST de api/
-# confirmó que no se importan (transitivas siguen entrando solas donde toque).
+# itsdangerous, jinja2 y markupsafe: un escaneo AST de api/ confirmó que no se
+# importan (las transitivas entran solas donde toque). python-multipart SE
+# QUEDA en la lista aunque hoy no se use: es parte del mandato de Field y si
+# mañana Admon sube un upload, tiene que haberlo.
 # ============================================================================
 
 # --- API web (mandato) -------------------------------------------------------
