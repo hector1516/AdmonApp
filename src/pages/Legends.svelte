@@ -632,34 +632,6 @@
 				{/if}
 			</div>
 		{/if}
-
-		<!-- GUIDE -->
-		<div class="guide-section" style="animation: slide-up 1.4s ease-out">
-			<h2 class="guide-title">📋 Cómo ganar ECCSA Points</h2>
-			<div class="guide-grid">
-				<div class="guide-item positive"><span>📝 Reporte firmado</span><span class="pts">+10</span></div>
-				<div class="guide-item positive"><span>🔧 Horas de servicio</span><span class="pts">+N</span></div>
-				<div class="guide-item positive"><span>🚗 Kilómetro registrado</span><span class="pts">+5</span></div>
-				<div class="guide-item positive"><span>⛽ Ticket OxxoGas</span><span class="pts">+3</span></div>
-				<div class="guide-item positive"><span>✍️ Firma remota</span><span class="pts">+8</span></div>
-				<div class="guide-item positive"><span>🔥 Racha diaria</span><span class="pts">+3</span></div>
-				<div class="guide-item positive"><span>📤 Cotización enviada</span><span class="pts">+6</span></div>
-				<div class="guide-item positive"><span>📇 Cliente nuevo registrado</span><span class="pts">+4</span></div>
-				<div class="guide-item positive"><span>🗂️ Reporte registrado</span><span class="pts">+3</span></div>
-				<div class="guide-item positive"><span>📸 Fotos de evidencia</span><span class="pts">+2</span></div>
-				<div class="guide-item positive"><span>🧾 Cotización creada</span><span class="pts">+2</span></div>
-				<div class="guide-item negative"><span> Comida en reporte</span><span class="pts">-1</span></div>
-				<div class="guide-item negative"><span>🎫 Vale generado</span><span class="pts">-2</span></div>
-			</div>
-			<div class="guide-subtitle">🔧 Horas de servicio — cómo se calculan</div>
-			<div class="guide-detail">
-				<div class="detail-row"><span class="detail-label">Fórmula:</span> <span class="detail-val">(Fin - Inicio) - Traslado - Comida</span></div>
-				<div class="detail-row"><span class="detail-label">Comida:</span> <span class="detail-val">1 hora (siempre)</span></div>
-				<div class="detail-row"><span class="detail-label">Entre ingenieros:</span> <span class="detail-val">se dividen las horas</span></div>
-				<div class="detail-row"><span class="detail-label">Puntos:</span> <span class="detail-val">floor(horas每人 / 2), mínimo 1</span></div>
-			</div>
-			<div class="guide-note">⚡ Los puntos se resetean cada domingo ⚡<br/>¡Compite por ser la Leyenda de la Semana!</div>
-		</div>
 	{/if}
 </div>
 
@@ -1007,27 +979,6 @@
 		color: #050810; font-size: 0.6rem; font-weight: 800;
 		padding: 0.2rem 0.5rem; border-radius: 8px;
 		box-shadow: 0 2px 8px rgba(255,107,0,0.4); z-index: 2;
-	}
-
-	/* Guide */
-	.guide-section { position: relative; z-index: 1; }
-	.guide-title { font-size: 1rem; color: #f1f5f9; margin-bottom: 0.8rem; }
-	.guide-grid { display: flex; flex-direction: column; gap: 0.4rem; }
-	.guide-item { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); border-radius: 10px; padding: 0.55rem 0.8rem; font-size: 0.8rem; border: 1px solid rgba(255,255,255,0.04); }
-	.guide-item.positive span:first-child { color: #94a3b8; }
-	.guide-item.negative span:first-child { color: #f87171; }
-	.guide-item .pts { font-weight: 800; font-size: 0.85rem; }
-	.guide-item.positive .pts { color: #4ade80; text-shadow: 0 0 8px rgba(74,222,128,0.3); }
-	.guide-item.negative .pts { color: #f87171; text-shadow: 0 0 8px rgba(248,113,113,0.3); }
-	.guide-subtitle { font-size: 0.75rem; color: #FFAE00; font-weight: 700; margin-top: 0.8rem; margin-bottom: 0.4rem; }
-	.guide-detail { background: rgba(255,171,0,0.05); border: 1px solid rgba(255,171,0,0.1); border-radius: 10px; padding: 0.6rem 0.8rem; }
-	.detail-row { font-size: 0.7rem; color: #cbd5e1; margin-bottom: 0.2rem; display: flex; gap: 0.4rem; }
-	.detail-label { color: #94a3b8; min-width: 90px; }
-	.detail-val { color: #e2e8f0; }
-	.guide-note {
-		font-size: 0.7rem; color: #FF6B00; text-align: center; margin-top: 1rem;
-		font-weight: 600; line-height: 1.6;
-		text-shadow: 0 0 10px rgba(255,107,0,0.3);
 	}
 
 	/* Hero 9:16 — White bg, avatar gigante, overlay */
