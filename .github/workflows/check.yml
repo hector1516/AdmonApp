@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Admon · verificación del shell
+#
+# Corre en cada push y en cada PR. Dos checks, ambos sin necesidad de secretos
+# ni de clonar ECCSA-Shell, justamente para que sea barato:
+#
+#   1. El CSS que este repo tiene es EXACTAMENTE el que el shell generó.
+#      que el shell generó: sync_shell.py dejó su huella en ECCSA_SHELL_SHA
+#      al copiarlo, así que si alguien edita el CSS a mano el hash deja de
+#      coincidir. Ese es el error que más cuesta encontrar después, porque
+#      compila bien y se ve bien: solo un token de más o un color distinto.
+#
+#   2. El popup de novedades dice la misma versión que el banner.
+#      Si se separan, el 📋 deja de saltar justo después de un release.
+#
+# La comprobación de que la copia NO esté atrasada respecto del shell la hace el
+# repo ECCSA-Shell (propagate.py --check), porque es el que tiene el token.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Check shell
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: check-shell-admon
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: El CSS no fue editado a mano
+        run: |
+          set -euo pipefail
+          CSS=src/styles/app.css
+          ESPERADO="$(cat ECCSA_SHELL_SHA)"
+          if [ ! -f "$CSS" ]; then
+            echo "::error::no existe $CSS"
+            exit 1
+          fi
+          REAL="$(sha256sum "$CSS" | cut -c1-12)"
+          if [ "$REAL" != "$ESPERADO" ]; then
+            echo "::error::$CSS fue editado a mano."
+            echo "::error::  esperado $ESPERADO (lo dejó sync_shell.py)"
+            echo "::error::  encontrado $REAL"
+            echo "::error::El CSS del shell NO se edita en la app. Se cambia en"
+            echo "::error::el repo ECCSA-Shell (tokens.css / src/body.css) y se"
+            echo "::error::propaga con tools/sync_shell.py."
+            exit 1
+          fi
+          echo "OK · $CSS intacto (shell $(cat ECCSA_SHELL_VERSION))"
+
+      - name: El popup de novedades dice la versión del banner
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, re, sys
+          banner = re.search(r"APP_VERSION\s*=\s*'([^']+)'",
+                             open("src/lib/shell.js", encoding="utf-8").read())
+          popup = json.load(open("public/changelog.json", encoding="utf-8"))
+          if not banner:
+              sys.exit("::error::no se encontró APP_VERSION en src/lib/shell.js")
+          if banner.group(1) != popup.get("version"):
+              sys.exit(f"::error::el banner muestra v{banner.group(1)} pero el "
+                       f"popup dice v{popup.get('version')}: el 📋 no va a saltar")
+          cambios = [c for c in popup.get("cambios") or [] if c]
+          if not cambios:
+              sys.exit("::error::public/changelog.json sin 'cambios'")
+          largos = [c for c in cambios if len(c) > 160]
+          if largos:
+              sys.exit(f"::error::{len(largos)} cambio(s) de más de 160 "
+                       f"caracteres: no entran en un iPhone")
+          print(f"OK · popup en v{popup['version']} con {len(cambios)} cambios")
+          PY
+
+      - name: El front compila
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build

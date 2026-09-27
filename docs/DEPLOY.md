@@ -81,3 +81,42 @@ HUB_DB_DATABASE=ECCSA_Admon_Pruebas uvicorn api.main:app --host 127.0.0.1 --port
 
 Commits: **locales hasta que se publiquen en AdmonApp**. No hacer force-push ni tocar
 `hector1516/Admon` (el HUB).
+
+---
+
+## Deploy automático (desde 2026-09-27)
+
+Ya no hace falta correr `build.ps1` a mano. Cada push a `master` dispara
+`.github/workflows/deploy.yml`, que decide entre dos caminos mirando **qué
+archivos** cambió:
+
+| Modo | Cuándo | Qué hace | Tiempo |
+|---|---|---|---|
+| **hotsync** | No cambió `Dockerfile`, `requirements.txt` ni `api/requirements.txt` | Compila el frontend en un `node:20-alpine` **descartable** y copia `dist/` + `api/` al contenedor que ya corre | segundos |
+| **rebuild** | Cambió alguno de esos | Lanza `schtasks /run /tn AdmonBuild`, que reconstruye la imagen y hace rollback si falla | minutos |
+
+El hotsync **no reconstruye la imagen**: por eso compila dentro de un
+contenedor y no en el host (el ServerVM no tiene node, ver `16bfa49`).
+
+Para verlo sin ejecutar nada:
+
+```bash
+bash deploy/hotsync.sh --dry-run
+```
+
+El rebuild va por `schtasks` y no por SSH porque Windows mata los procesos
+hijos al cerrarse la sesión.
+
+**El primer deploy con el workflow conviene vigilarlo**: antes todo era manual.
+Los dos caminos dicen en el log qué modo eligieron y por qué.
+
+## Verificación
+
+`.github/workflows/check.yml` corre en cada push y PR:
+
+- que `src/styles/app.css` **no** fue editado a mano (compara `ECCSA_SHELL_SHA`),
+- que `public/changelog.json` dice la misma versión que el banner,
+- que el frontend compila.
+
+Que la copia del shell no esté **atrás** lo comprueba el repo `ECCSA-Shell`
+(propaga solo con `propagate.yml`).
