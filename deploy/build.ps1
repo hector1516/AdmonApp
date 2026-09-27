@@ -25,6 +25,12 @@
 # El script valida cada paso explícitamente con $LASTEXITCODE, que es la forma
 # correcta de detectar fallos de comandos nativos.
 $ErrorActionPreference = 'Continue'
+# Esta tarea corre en modo batch (sin consola). Si git no tiene credenciales,
+# NO falla: abre un prompt por stdin y se queda esperando para siempre, y el
+# watchdog solo puede reportar un timeout sin explicar nada. Con esta variable
+# git falla al instante y con mensaje legible en vez de colgarse.
+$env:GIT_TERMINAL_PROMPT = '0'
+
 $root = Split-Path -Parent $PSScriptRoot
 $log  = Join-Path $root 'build.log'
 $image = 'hub-admon'
