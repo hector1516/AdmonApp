@@ -61,17 +61,28 @@ $commit = (git rev-parse --short HEAD)
 Log "commit=$commit"
 
 # ── 2. Dependencias + build del frontend (dist/ está gitignored) ──────────────
-Log 'npm ci'
-npm ci 2>&1 | Select-Object -Last 5 | ForEach-Object { Log "  $_" }
-if ($LASTEXITCODE -ne 0) {
-    Log 'npm ci falló; reintento con npm install'
-    npm install 2>&1 | Select-Object -Last 5 | ForEach-Object { Log "  $_" }
-    if ($LASTEXITCODE -ne 0) { Fail 'npm install falló' }
+# El ServerVM NO tiene node/npm instalados, así que el frontend se compila en el
+# equipo de desarrollo y se sube el dist/ ya generado (por scp) a C:\admon\dist.
+# Si algún día se instala node aquí, el script vuelve a compilarlo.
+$hasNode = $null -ne (Get-Command npm -ErrorAction SilentlyContinue)
+if ($hasNode) {
+    Log 'npm ci'
+    npm ci 2>&1 | Select-Object -Last 5 | ForEach-Object { Log "  $_" }
+    if ($LASTEXITCODE -ne 0) {
+        Log 'npm ci fallo; reintento con npm install'
+        npm install 2>&1 | Select-Object -Last 5 | ForEach-Object { Log "  $_" }
+        if ($LASTEXITCODE -ne 0) { Fail 'npm install fallo' }
+    }
+    Log 'npm run build (genera dist/)'
+    npm run build 2>&1 | Select-Object -Last 8 | ForEach-Object { Log "  $_" }
+    if ($LASTEXITCODE -ne 0) { Fail 'npm run build fallo' }
+} else {
+    Log 'AVISO: node/npm no estan en este host: se usa el dist/ precompilado'
+    Log '       (compilar en el equipo de desarrollo y copiarlo a C:\admon\dist)'
+    if (-not (Test-Path (Join-Path $root 'dist\assets'))) {
+        Fail 'no hay dist/ y este host no tiene node para generarlo'
+    }
 }
-
-Log 'npm run build (genera dist/)'
-npm run build 2>&1 | Select-Object -Last 8 | ForEach-Object { Log "  $_" }
-if ($LASTEXITCODE -ne 0) { Fail 'npm run build falló' }
 $bundle = (Get-ChildItem -Path (Join-Path $root 'dist\assets') -Filter 'index-*.js' -ErrorAction SilentlyContinue | Select-Object -First 1).Name
 if (-not $bundle) { Fail 'no se encontró dist/assets/index-*.js tras el build' }
 Log "bundle=$bundle"
