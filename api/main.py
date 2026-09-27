@@ -3849,8 +3849,13 @@ async def legends_score_log(current_user: dict = Depends(get_current_user)):
     Muestra cada evento que sumó o restó puntos esta semana.
     Se resetea cada domingo 3 AM igual que los puntos."""
     import datetime as _dt
-    today = _dt.date.today()
-    sunday = today - _dt.timedelta(days=(today.weekday() + 1) % 7)
+    # Domingo 00:00 en HORA MÉXICO. El contenedor corre en UTC y con
+    # date.today() la semana empezaba el sábado 18:00 hora México, dejando la
+    # bitácora y la puntuación semanal vacías (mismo fix que legends_time.py en
+    # Field/WorkersAdmon).
+    import pytz as _pytz
+    _ahora_mx = _dt.datetime.now(_pytz.timezone("America/Mexico_City"))
+    sunday = (_ahora_mx - _dt.timedelta(days=(_ahora_mx.weekday() + 1) % 7)).date()
 
     conn = get_connection()
     try:
