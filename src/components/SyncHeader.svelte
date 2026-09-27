@@ -5,6 +5,26 @@
 	import { online, onlinePing } from '$lib/stores/online.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { pendingCount, syncing, syncPush, refreshPending } from '$lib/sync.js';
+	import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js';
+	import { onMount } from 'svelte';
+
+	// Banner común ECCSA-Shell: además del estado de sync y el usuario,
+	// muestra la versión de la app/shell y si estás en la oficina o remoto.
+	let lugar = 'desconocido';
+	let ip = '';
+
+	onMount(async () => {
+		try {
+			const r = await fetch('/api/shell/state', { credentials: 'same-origin' });
+			if (!r.ok) return;
+			const d = await r.json();
+			lugar = d.lugar?.modo || 'desconocido';
+			ip = d.lugar?.ip || '';
+		} catch (e) { /* fail silent: el shell no tumba la app */ }
+	});
+
+	$: lugarTxt = lugar === 'oficina' ? 'Oficina' : lugar === 'remoto' ? 'Remoto' : '—';
+	$: lugarIcono = lugar === 'oficina' ? '🏢' : lugar === 'remoto' ? '🏠' : '📍';
 
 	async function forceSync() {
 		if (!get(online) || get(syncing)) return;
@@ -33,6 +53,8 @@
 	{#if $auth.user}
 		<span class="who">👤 {$auth.user.nombre}</span>
 	{/if}
+	<span class="lugar {lugar}" title={ip}>{lugarIcono} {lugarTxt}</span>
+	<span class="vers">v{APP_VERSION} · shell {SHELL_VERSION}</span>
 </button>
 
 <style>
@@ -68,6 +90,17 @@
 	.dot.pending { background: #F59E0B; animation: pulse 1.5s infinite; }
 	.dot.syncing { background: #3B82F6; animation: spin 1s linear infinite; }
 	.dot.offline { background: #EF4444; }
+	.lugar, .vers {
+		font-size: 0.7rem;
+		font-weight: 500;
+		color: var(--color-text-muted);
+		white-space: nowrap;
+	}
+	.lugar.oficina { color: var(--color-success); }
+	.lugar.remoto { color: var(--color-primary-light); }
+	.vers { margin-left: auto; font-variant-numeric: tabular-nums; }
+	@media (max-width: 820px) { .vers { display: none; } }
+	@media (max-width: 430px) { .lugar { display: none; } }
 	.who {
 		flex-basis: 100%;
 		text-align: center;

@@ -400,6 +400,43 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
 
 # --- User Endpoints ---
 
+@app.get("/api/shell/state")
+async def shell_state(request: Request, current_user: dict = Depends(get_current_user)):
+    """Estado del banner común (ECCSA-Shell · docs/CONTRATO.md).
+    El cliente combina esto con su store de sync (pendientes/sincronizando);
+    aquí va lo que solo el servidor sabe: app, versiones, usuario y lugar."""
+    import ipaddress
+    app_version = "1.0.0"
+    shell_version = "?"
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "ECCSA_SHELL_VERSION"),
+                encoding="utf-8") as fh:
+            shell_version = fh.read().strip() or "?"
+    except OSError:
+        pass
+    # ¿oficina o remoto? misma regla que Field: IP privada = red ECCSA.
+    xff = request.headers.get("X-Forwarded-For", "")
+    ip = (xff.split(",")[0].strip() if xff else
+          (request.headers.get("X-Real-IP") or
+           (request.client.host if request.client else "")))
+    modo = "desconocido"
+    if ip:
+        try:
+            addr = ipaddress.ip_address(ip)
+            modo = "oficina" if (addr.is_private or addr.is_loopback) else "remoto"
+        except ValueError:
+            modo = "desconocido"
+    return {
+        "app": {"id": "admon", "nombre": "Admon", "version": app_version},
+        "shell": {"version": shell_version},
+        "user": {"nombre": current_user.get("nombre"),
+                 "email": current_user.get("email")},
+        "sync": {"estado": "idle", "pendientes": 0, "ultimo": None},
+        "lugar": {"modo": modo, "ip": ip},
+    }
+
+
 @app.get("/api/users/me", response_model=UserInfo)
 async def get_me(current_user: dict = Depends(get_current_user)):
     return UserInfo(**current_user)
