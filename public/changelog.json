@@ -2,6 +2,7 @@
   "app": "admon",
   "version": "1.1.0",
   "cambios": [
+    "🔔 Se fue el botón de notificaciones de la barra: ya no se usaba y en algunos casos estaba duplicado con la pestaña propia de cada app.",
     "📋 Novedades: la primera vez que abras una versión nueva, esta ventanita te dice qué cambió. El botón 📋 la vuelve a abrir cuando quieras.",
     "🏢 El banner ahora sí dice si estás en la oficina o en remoto (antes siempre mostraba 📍).",
     "📦 La app funciona sin conexión: guarda los últimos 10 registros y los detalles de cada módulo.",
