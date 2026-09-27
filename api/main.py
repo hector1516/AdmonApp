@@ -18,7 +18,11 @@ app = FastAPI(title="HUB Admon API", version="1.0.0")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/token")
 
-DB_SERVER = os.getenv("HUB_DB_SERVER", "172.26.117.220")
+# IP LOCAL del servidor SQL: la misma que usan Field y workersadmon. Antes el
+# default era la IP de la VPN (172.26.117.220) y, como el contenedor se clonaba
+# con 'docker inspect', esa IP se venía arrastrando. La variable de entorno gana
+# siempre; este default solo aplica si faltara.
+DB_SERVER = os.getenv("HUB_DB_SERVER", "10.188.141.15")
 DB_USER = os.getenv("HUB_DB_USER", "sa")
 DB_PASSWORD = os.getenv("HUB_DB_PASSWORD", "eyccazo")
 DB_DATABASE = os.getenv("HUB_DB_DATABASE", "ECCSA_Admon")
