@@ -42,6 +42,18 @@ function Log($msg) {
     Add-Content -Path $log -Value $line
 }
 
+# Windows PowerShell 5.1 + $ErrorActionPreference='Stop' convierte CUALQUIER
+# salida por stderr de un comando nativo en error terminante. docker build
+# (BuildKit) escribe TODO su progreso por stderr, asi que sin esto el script
+# muere en la linea 2 del build. Para esos comandos se baja a 'Continue' y se
+# juzga por $LASTEXITCODE, que es lo que corresponde.
+function Run-Native {
+    param([scriptblock]$Cmd)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Cmd } finally { $ErrorActionPreference = $prev }
+}
+
 function Fail($msg) {
     Log "ERROR: $msg"
     Add-Content -Path $log -Value ("FIN rc=1")
@@ -59,7 +71,7 @@ Log ("docker: " + (docker version --format '{{.Server.Version}}' 2>&1))
 
 # ── 1. Código actualizado ─────────────────────────────────────────────────────
 Log 'git pull --ff-only'
-git pull --ff-only 2>&1 | ForEach-Object { Log "  $_" }
+Run-Native { git pull --ff-only 2>&1 } | ForEach-Object { Log "  $_" }
 if ($LASTEXITCODE -ne 0) { Fail 'git pull falló' }
 $commit = (git rev-parse --short HEAD)
 Log "commit=$commit"
@@ -93,8 +105,8 @@ Log "bundle=$bundle"
 
 # ── 3. Imagen ─────────────────────────────────────────────────────────────────
 Log "docker build -t ${image}:${newTag} ."
-docker build -t "${image}:${newTag}" . 2>&1 | Select-Object -Last 6 | ForEach-Object { Log "  $_" }
-if ($LASTEXITCODE -ne 0) { Fail 'docker build falló' }
+Run-Native { docker build --progress=plain -t "${image}:${newTag}" . 2>&1 } | ForEach-Object { Log "  $_" }
+if ($LASTEXITCODE -ne 0) { Fail "docker build fallo (rc=$LASTEXITCODE)" }
 $newId = (docker images --format '{{.ID}}' "${image}:${newTag}" | Select-Object -First 1)
 $oldLatest = (docker images --format '{{.ID}}' "${image}:latest" | Select-Object -First 1)
 Log "imagen nueva=${image}:${newTag} ($newId)  anterior latest=$oldLatest"
@@ -150,7 +162,7 @@ Log (" recrear: " + ($logArgs -join ' '))
 
 # stop con verificación: el timeout del cliente no significa que no se aplicó
 Log 'stop del contenedor actual (t=5)'
-docker stop -t 5 admon 2>&1 | ForEach-Object { Log "  $_" }
+Run-Native { docker stop -t 5 admon 2>&1 } | ForEach-Object { Log "  $_" }
 $stillRunning = (docker inspect -f '{{.State.Running}}' admon 2>$null)
 if ($stillRunning -eq 'true') {
     Log 'el contenedor sigue corriendo: NO se renombra, producción intacta'
@@ -191,7 +203,7 @@ if (-not $healthy) {
 Log "health OK (bundle $bundle en producción)"
 
 # ── 7. Limpieza (solo el contenedor anterior; nada de prune global) ──────────
-docker rm -f admon_old 2>&1 | ForEach-Object { Log "  $_" }
+Run-Native { docker rm -f admon_old 2>&1 } | ForEach-Object { Log "  $_" }
 
 Log "imagen activa: ${image}:latest ($newId) | rollback: $oldLatest"
 Log "commit desplegado: $commit"
