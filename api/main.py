@@ -3374,9 +3374,12 @@ async def passkey_delete(pid: int, current_user: dict = Depends(get_current_user
 # Sistema gamificado de puntos/ranking sobre las MISMAS tablas compartidas:
 #   HUB_UserScores (semanal+total+nivel+racha), HUB_ScoreLog (bitácora),
 #   HUB_UserAvatars, HUB_WeeklyWinners, HUB_Users.Nickname + HUB_Passkeys.
-# El cron semanal (ganador + reset domingo 3 AM) lo ejecuta Field
-# (program legends_cron en su supervisord) sobre la misma BD; aquí solo
-# exponemos los endpoints de lectura, /award y el cálculo manual.
+# El cron semanal (ganador + reset domingo 3 AM) y el audit cada 5 min los
+# ejecuta el contenedor `workersadmon` (programas legends_cron y legends_audit;
+# migración del 2026-09-26 — antes eran programs del supervisord de Field) sobre
+# la misma BD; aquí solo exponemos los endpoints de lectura, /award y el cálculo
+# manual. Ojo: `legends_audit` debe tener UNA sola instancia en todo el entorno
+# (si se duplica, duplica HUB_ScoreLog).
 # Diferencias con Field: auth = get_current_user (token simple email|ts),
 # push adaptado al esquema de Admon (HUB_PushSubscriptions.UserEmail +
 # VAPID en HUB_PushConfig), y conexiones siempre cerradas.
