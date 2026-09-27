@@ -83,6 +83,11 @@ jobs:
 
   deploy:
     runs-on: self-hosted
+    # El runner es Windows. `shell: bash` ahí NO es Git Bash sino
+    # C:\Windows\system32\bash.exe (el de WSL), que en esta máquina no
+    # está instalado y falla con 'Subsystem for Linux not installed'.
+    # Por eso los pasos de bash apuntan explícitamente al Git Bash.
+
     timeout-minutes: 30
 
     steps:
@@ -98,7 +103,7 @@ jobs:
       # imagen: Dockerfile, requirements.txt y api/requirements.txt.
       - name: Decidir rebuild vs hotsync
         id: gate
-        shell: bash
+        shell: 'C:\Program Files\Git\bin\bash.exe -e {0}'
         run: |
           set -euo pipefail
           BEFORE="${{ github.event.before }}"
@@ -130,7 +135,7 @@ jobs:
           fi
 
       - name: Resumen
-        shell: bash
+        shell: 'C:\Program Files\Git\bin\bash.exe -e {0}'
         run: |
           echo "### Deploy de Admon" >> "$GITHUB_STEP_SUMMARY"
           echo "- **modo**: ${{ steps.gate.outputs.modo }}" >> "$GITHUB_STEP_SUMMARY"
@@ -140,7 +145,7 @@ jobs:
       # ── Camino rápido ──────────────────────────────────────────────────────
       - name: Hotsync
         if: steps.gate.outputs.modo == 'hotsync'
-        shell: bash
+        shell: 'C:\Program Files\Git\bin\bash.exe -e {0}'
         run: bash deploy/hotsync.sh
 
       # ── Camino completo ────────────────────────────────────────────────────
