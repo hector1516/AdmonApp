@@ -1,0 +1,163 @@
+<#
+    build.ps1 — Build + deploy de la app Admon (FastAPI + Svelte) en el contenedor `admon`.
+
+    Patrón equivalente al de WorkersAdmon: se ejecuta desde la raíz del repo en el
+    ServerVM (C:\admon) y deja el resultado en build.log terminando con "FIN rc=<n>".
+    Lanzamiento manual:  schtasks /run /tn AdmonBuild     (o powershell -File deploy\build.ps1)
+
+    Pasos: git pull -> npm ci -> npm run build -> docker build (sat01) -> retag
+          (rollback<-latest, latest/legends<-sat01) -> recrear el contenedor -> health.
+
+    Decisiones de diseño (lecciones del 2026-09-26/27, ver docs/DEPLOY.md):
+    - La configuración del contenedor (env con credenciales, puertos, binds, red,
+      restart policy) se LEE del contenedor existente con `docker inspect`: nunca se
+      hardcodean secretos ni se redeclaran a mano.
+    - El `stop` puede reportar timeout y aun así aplicarse. Antes de renombrar se
+      VERIFICA que el contenedor quedó detenido; si sigue corriendo se aborta y
+      producción queda intacta (ese error tumbó admon ~2 min una vez).
+    - Si el health check falla, se hace rollback: se borra el contenedor nuevo, se
+      renombra y arranca el anterior.
+#>
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$log  = Join-Path $root 'build.log'
+$image = 'hub-admon'
+$newTag = 'sat01'
+$healthUrl = 'http://localhost:8103/api/health'
+$healthTimeoutSec = 60
+
+function Log($msg) {
+    $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
+    Write-Output $line
+    Add-Content -Path $log -Value $line
+}
+
+function Fail($msg) {
+    Log "ERROR: $msg"
+    Add-Content -Path $log -Value ("FIN rc=1")
+    exit 1
+}
+
+Set-Location $root
+Set-Content -Path $log -Value ("=== build Admon {0} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+Log "root=$root"
+
+# ── 0. Preflight ───────────────────────────────────────────────────────────────
+if (-not (Test-Path (Join-Path $root 'package.json'))) { Fail 'no package.json: esto no es la raíz del repo' }
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Fail 'docker no está en PATH' }
+Log ("docker: " + (docker version --format '{{.Server.Version}}' 2>&1))
+
+# ── 1. Código actualizado ─────────────────────────────────────────────────────
+Log 'git pull --ff-only'
+git pull --ff-only 2>&1 | ForEach-Object { Log "  $_" }
+if ($LASTEXITCODE -ne 0) { Fail 'git pull falló' }
+$commit = (git rev-parse --short HEAD)
+Log "commit=$commit"
+
+# ── 2. Dependencias + build del frontend (dist/ está gitignored) ──────────────
+Log 'npm ci'
+npm ci 2>&1 | Select-Object -Last 5 | ForEach-Object { Log "  $_" }
+if ($LASTEXITCODE -ne 0) {
+    Log 'npm ci falló; reintento con npm install'
+    npm install 2>&1 | Select-Object -Last 5 | ForEach-Object { Log "  $_" }
+    if ($LASTEXITCODE -ne 0) { Fail 'npm install falló' }
+}
+
+Log 'npm run build (genera dist/)'
+npm run build 2>&1 | Select-Object -Last 8 | ForEach-Object { Log "  $_" }
+if ($LASTEXITCODE -ne 0) { Fail 'npm run build falló' }
+$bundle = (Get-ChildItem -Path (Join-Path $root 'dist\assets') -Filter 'index-*.js' -ErrorAction SilentlyContinue | Select-Object -First 1).Name
+if (-not $bundle) { Fail 'no se encontró dist/assets/index-*.js tras el build' }
+Log "bundle=$bundle"
+
+# ── 3. Imagen ─────────────────────────────────────────────────────────────────
+Log "docker build -t ${image}:${newTag} ."
+docker build -t "${image}:${newTag}" . 2>&1 | Select-Object -Last 6 | ForEach-Object { Log "  $_" }
+if ($LASTEXITCODE -ne 0) { Fail 'docker build falló' }
+$newId = (docker images --format '{{.ID}}' "${image}:${newTag}" | Select-Object -First 1)
+$oldLatest = (docker images --format '{{.ID}}' "${image}:latest" | Select-Object -First 1)
+Log "imagen nueva=${image}:${newTag} ($newId)  anterior latest=$oldLatest"
+
+# ── 4. Retag: el anterior queda como rollback ────────────────────────────────
+if ($oldLatest -and $oldLatest -ne $newId) {
+    docker tag "${image}:$($oldLatest)" "${image}:rollback" | Out-Null
+    Log "rollback <- $oldLatest"
+}
+foreach ($t in @('latest', 'legends')) {
+    docker tag "${image}:${newTag}" "${image}:$t" | Out-Null
+    Log "$t <- ${newTag}"
+}
+
+# ── 5. Recrear el contenedor reutilizando su config actual ────────────────────
+$existe = docker ps -a --filter 'name=^admon$' --format '{{.Names}}'
+if ($existe -notcontains 'admon') { Fail 'no existe el contenedor admon: no sé su configuración' }
+$inspect = docker inspect admon 2>$null | ConvertFrom-Json
+if (-not $inspect) { Fail 'docker inspect admon no devolvió configuración' }
+$c = $inspect[0]
+Log "contenedor actual: $($c.Id.Substring(0,12)) image=$($c.Config.Image) running=$($c.State.Running)"
+
+$runArgs = @('run', '-d', '--name', 'admon')
+if ($c.HostConfig.RestartPolicy.Name) { $runArgs += @('--restart', $c.HostConfig.RestartPolicy.Name) }
+if ($c.HostConfig.NetworkMode)          { $runArgs += @('--network', $c.HostConfig.NetworkMode) }
+foreach ($b in @($c.HostConfig.Binds))    { if ($b) { $runArgs += @('-v', $b) } }
+foreach ($p in $c.HostConfig.PortBindings.PSObject.Properties) {
+    foreach ($b in @($p.Value)) {
+        if ($null -eq $b) { continue }
+        $hp = if ($b.HostIp) { "$($b.HostIp):$($b.HostPort)" } else { $b.HostPort }
+        $runArgs += @('-p', "${hp}:$($p.Name)")
+    }
+}
+foreach ($e in @($c.Config.Env)) { if ($e) { $runArgs += @('-e', $e) } }
+$runArgs += "${image}:latest"
+Log (" recrear: " + ($runArgs -join ' '))
+
+# stop con verificación: el timeout del cliente no significa que no se aplicó
+Log 'stop del contenedor actual (t=5)'
+docker stop -t 5 admon 2>&1 | ForEach-Object { Log "  $_" }
+$stillRunning = (docker inspect -f '{{.State.Running}}' admon 2>$null)
+if ($stillRunning -eq 'true') {
+    Log 'el contenedor sigue corriendo: NO se renombra, producción intacta'
+    Fail 'stop no completó; abortado para no dejar admon caído'
+}
+Log 'contenedor detenido OK'
+
+docker rename admon admon_old
+if ($LASTEXITCODE -ne 0) { Fail 'rename a admon_old falló' }
+
+$newCid = docker @runArgs
+if ($LASTEXITCODE -ne 0) {
+    Log "docker run falló: $newCid"
+    docker rename admon_old admon | Out-Null
+    docker start admon | Out-Null
+    Fail 'docker run falló; se restauró el contenedor anterior'
+}
+$newId12 = (($newCid | Select-Object -Last 1).ToString().Trim()).Substring(0, 12)
+Log "contenedor nuevo: $newId12"
+
+# ── 6. Health check (con rollback si no responde) ────────────────────────────
+Log "health check en $healthUrl (máx ${healthTimeoutSec}s)"
+$healthy = $false
+for ($i = 0; $i -lt $healthTimeoutSec; $i += 3) {
+    Start-Sleep -Seconds 3
+    try {
+        $r = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 5
+        if ($r.StatusCode -eq 200) { $healthy = $true; break }
+    } catch { }
+}
+if (-not $healthy) {
+    Log 'health FALLÓ → rollback al contenedor anterior'
+    docker rm -f admon | Out-Null
+    docker rename admon_old admon | Out-Null
+    docker start admon | Out-Null
+    Fail 'health check falló; restaurado el contenedor anterior'
+}
+Log "health OK (bundle $bundle en producción)"
+
+# ── 7. Limpieza (solo el contenedor anterior; nada de prune global) ──────────
+docker rm -f admon_old 2>&1 | ForEach-Object { Log "  $_" }
+
+Log "imagen activa: ${image}:latest ($newId) | rollback: $oldLatest"
+Log "commit desplegado: $commit"
+Add-Content -Path $log -Value ("FIN rc=0")
+exit 0
