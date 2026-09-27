@@ -1,4 +1,4 @@
-﻿<#
+﻿﻿<#
     build.ps1 — Build + deploy de la app Admon (FastAPI + Svelte) en el contenedor `admon`.
 
     Patrón equivalente al de WorkersAdmon: se ejecuta desde la raíz del repo en el
@@ -31,6 +31,10 @@ $image = 'hub-admon'
 $newTag = 'sat01'
 $healthUrl = 'http://localhost:8103/api/health'
 $healthTimeoutSec = 60
+# Servidor SQL del ecosistema = IP LOCAL (misma que usan Field y workersadmon).
+# Es lo único que no se hereda del contenedor actual, para no arrastrar la IP de
+# la VPN con la que se creó el contenedor la primera vez.
+$DbServerLocal = '10.188.141.15'
 
 function Log($msg) {
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
@@ -124,7 +128,19 @@ foreach ($p in $c.HostConfig.PortBindings.PSObject.Properties) {
         $runArgs += @('-p', "${hp}:$($p.Name)")
     }
 }
-foreach ($e in @($c.Config.Env)) { if ($e) { $runArgs += @('-e', $e) } }
+# Env del contenedor: se clona el actual (para no perder las credenciales) y se
+# sobrescribe la BD. El contenedor nació apuntando a la IP de la VPN
+# (172.26.117.220) y, como acá se hereda su env, ese valor se arrastraba sola
+# vez tras otra. Se fija en la IP LOCAL del servidor SQL para que la app no
+# dependa de cómo se haya creado el contenedor.
+$envList = @(@($c.Config.Env) | Where-Object { $_ })
+$envList = $envList | ForEach-Object {
+    if ($_ -like 'HUB_DB_SERVER=*') { "HUB_DB_SERVER=$DbServerLocal" } else { $_ }
+}
+if (-not ($envList | Where-Object { $_ -like 'HUB_DB_SERVER=*' })) {
+    $envList += "HUB_DB_SERVER=$DbServerLocal"
+}
+foreach ($e in $envList) { $runArgs += @('-e', $e) }
 $runArgs += "${image}:latest"
 # Oculta los secretos: el log se lee en pantalla y a veces se comparte.
 $logArgs = $runArgs | ForEach-Object {
