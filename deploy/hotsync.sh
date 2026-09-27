@@ -27,6 +27,16 @@ IMAGE=node:20-alpine
 HEALTH_URL=http://localhost:8103/health
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# En Git Bash (MSYS2) las rutas que empiezan con / se convierten solas a
+# rutas de Windows antes de llegar al comando. Eso rompe los argumentos de
+# docker: -w /app se volaba 'C:/Program Files/Git/app' y el daemon rechazaba
+# el contenedor con rc=125. Se desactiva la conversion y se convierte el
+# repo a formato Windows una sola vez, con cygpath -m (barras normales, que
+# es lo que docker en Windows entiende bien).
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+ROOT_DOCKER="$(cygpath -m "$ROOT" 2>/dev/null || echo "$ROOT")"
+
 DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
@@ -69,7 +79,7 @@ fi
 # mezclar las dependencias de Linux con las del host.
 say "1/3 compilando el frontend (node:20-alpine, npm ci)"
 run docker run --rm \
-    -v "$ROOT":/app \
+    -v "$ROOT_DOCKER:/app" \
     -v /app/node_modules \
     -w /app \
     "$IMAGE" \
@@ -83,10 +93,10 @@ say "    dist/ generado ($(find "$ROOT/dist" -type f | wc -l) archivos)"
 # cambió, pero el código Python sí puede haber cambiado, y con esto se publica
 # sin reconstruir.
 say "2/3 copiando dist/ y api/ al contenedor"
-run docker cp "$ROOT/dist/." "$CONTAINER:/app/dist"
-run docker cp "$ROOT/api/." "$CONTAINER:/app/api"
+run docker cp "$ROOT_DOCKER/dist/." "$CONTAINER:/app/dist"
+run docker cp "$ROOT_DOCKER/api/." "$CONTAINER:/app/api"
 # La versión del shell la lee GET /api/shell/state para el banner.
-run docker cp "$ROOT/ECCSA_SHELL_VERSION" "$CONTAINER:/app/ECCSA_SHELL_VERSION"
+run docker cp "$ROOT_DOCKER/ECCSA_SHELL_VERSION" "$CONTAINER:/app/ECCSA_SHELL_VERSION"
 
 # uvicorn corre como PID 1 (no hay supervisor): reiniciar el contenedor es la
 # forma de que cargue el código nuevo.
