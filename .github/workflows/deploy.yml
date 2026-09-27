@@ -1,24 +1,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Admon · deploy automático
 #
-# La idea: no reconstruir la imagen en cada push. El gate mira QUÉ cambió y
-# decide entre dos caminos:
+# La idea: no reconstruir la imagen en cada push. El gate mira QUÉ archivos
+# cambió y elige entre dos caminos:
 #
-#   rebuild  → deploy/build.ps1 (reconstruye la imagen y recrea el contenedor,
-#              con el rollback que ya tenía). Se usa cuando el push tocó algo
-#              de la IMAGEN: Dockerfile, requirements.txt o
-#              api/requirements.txt.
-#   hotsync  → deploy/hotsync.sh (compila el frontend y lo copia al contenedor
-#              que ya corre). Se usa para todo lo demás: .svelte, .css, JS.
+#   rebuild  → deploy/build.ps1 (reconstruye la imagen y recrea el
+#              contenedor, con el rollback que ya tenía). Se usa cuando el push
+#              tocó un insumo de la IMAGEN: Dockerfile / requirements.txt / api/requirements.txt
+#   hotsync  → deploy/hotsync.sh (compila lo estático y lo copia al contenedor
+#              que ya corre). Se usa para todo lo demás: .svelte, .css, .py.
 #
-# El motivo: aunque el Dockerfile de Admon ya compila el frontend FUERA de la
-# imagen, reconstruirla y recrear el contenedor sigue siendo más lento que
-# copiar dist/ y api/ al contenedor que ya está corriendo.
+# ── Sobre el shell de los pasos ──────────────────────────────────────────────
+# El runner es WINDOWS con Windows PowerShell 5.1. No hay PowerShell 7, así que
+# `shell: pwsh` muere con "pwsh: command not found". Y `shell: bash` tampoco
+# sirve: en Windows apunta a C:\Windows\system32\bash.exe, que es el de WSL y no
+# está instalado en el ServerVM. Por eso los pasos van en `shell: powershell`, y
+# el único que necesita un .sh (el hotsync) invoca al Git Bash explícitamente.
 #
-# El runner es self-hosted en el ServerVM (el mismo de antes), porque el deploy
-# tiene que hablar con el Docker de esa máquina. OJO: un folder de runner solo
-# sirve a UN repo — si este workflow se queda en cola, es que el runner no está
-# registrado en ESTE repo.
+# Por lo mismo las salidas se escriben con [IO.File]::AppendAllText y no con
+# `Out-File -Encoding utf8`: en PowerShell 5.1 eso mete BOM, y un BOM al
+# principio de $GITHUB_OUTPUT hace que GitHub no lea las variables del gate.
+#
+# ── Sobre el runner ──────────────────────────────────────────────────────────
+# Cada repo necesita su propio runner: un folder de runner solo sirve para uno.
+# Este está en C:\actions-runner-admonapp, nombre AdmonApp-Runner, labels self-hosted,windows.
 # ─────────────────────────────────────────────────────────────────────────────
 name: Deploy Admon
 
@@ -27,92 +32,74 @@ on:
     branches: [master]
   workflow_dispatch:
 
-# Nunca dos deploys a la vez: un push mientras corre el anterior se cancela.
+# Un push nuevo cancela el anterior en vez de esperarlo en cola: si el anterior
+# está atascado por falta de runner, el nuevo tampoco podría arrancar. Con
+# cancel-in-progress en false, uno atascado retenía el grupo y congelaba todos
+# los deploys siguientes.
 concurrency:
   group: deploy-admon
-  # Un push nuevo cancela el anterior en vez de esperarlo en cola: si el
-  # anterior esta atascado por falta de runner, el nuevo tampoco podria empezar.
   cancel-in-progress: true
 
 jobs:
-  # Por qué existe esto: un runner self-hosted registrado en un repo NO sirve
-  # para otro, y si al repo no se le registra uno, su workflow se queda en
-  # "queued" PARA SIEMPRE y sin decir por qué. GitHub no avisa.
-  #
   # No se puede consultar la API de runners desde el workflow: exige permiso de
-  # administración de repos, que el GITHUB_TOKEN no tiene (devuelve 403). Así
-  # que en vez de preguntar, este job hace las dos cosas que sí puede con
-  # `actions: write`:
-  #   1. cancela Deploys que llevan atascados más de N minutos, y
-  #   2. deja un comentario que dice qué hacer.
-  # Además, el push nuevo nunca queda esperando al anterior: ver
-  # cancel-in-progress arriba.
-  #
-  # Si esto aparece, el arreglo es registrar un runner para ESTE repo, con
-  # folder y nombre propios (un folder de runner solo sirve para un repo).
+  # administración de repos, que GITHUB_TOKEN no tiene (devuelve 403), así que
+  # un guard que la consulte concluye "no hay runner" aunque lo haya. En vez de
+  # preguntar, este job usa solo `actions: write` (que sí tiene): cancela los
+  # Deploys atascados más de 10 min y dice cuál es la causa habitual.
   desbloquear:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: write      # para cancelar y comentar
+      actions: write
       contents: read
     steps:
       - name: Cancelar deploys atascados
         env:
           GH_TOKEN: ${{ github.token }}
-          ATASCADO_MIN: 10
         run: |
           set -euo pipefail
-          ATASCADO=$(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
-            --jq '[.workflow_runs[] | select(.name | startswith("Deploy"))
-                   | select(.created_at < "'"$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)"'")] | length' 2>/dev/null || echo 0)
-          echo "Deploys en cola hace más de $ATASCADO_MIN min: $ATASCADO"
-          if [ "$ATASCADO" -eq 0 ]; then
+          LIMITE=$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%SZ)
+          ATASCADOS=$(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
+            --jq "[.workflow_runs[] | select(.name | startswith(\"Deploy\"))
+                   | select(.created_at < \"$LIMITE\")] | .[] | .id")
+          if [ -z "$ATASCADOS" ]; then
             echo "::notice::nada atascado"
             exit 0
           fi
-          echo "::error::$ATASCADO deploy(s) llevan más de $ATASCADO_MIN min en cola."
-          echo "::error::Casi siempre es que este repo NO tiene un runner self-hosted"
+          echo "::error::deploy(s) con más de 10 min en cola: $(echo "$ATASCADOS" | tr '\n' ' ')"
+          echo "::error::casi siempre es que este repo NO tiene un runner self-hosted"
           echo "::error::online. El registro es por repo, con folder y nombre propios."
-          echo "::error::Se cancelan para que no bloqueen el siguiente push."
-          for id in $(gh api "repos/${{ github.repository }}/actions/runs?status=queued" \
-              --jq '.workflow_runs[] | select(.name | startswith("Deploy")) | .id'); do
+          echo "$ATASCADOS" | while read -r id; do
             gh api -X POST "repos/${{ github.repository }}/actions/runs/$id/cancel" >/dev/null 2>&1 \
               && echo "  cancelado $id" || true
           done
 
   deploy:
     runs-on: self-hosted
-
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # El hotsync solo necesita el código; con history completa el
-          # `git diff` del gate puede comparar bien contra el push anterior.
+          # El hotsync necesita el código, y el gate necesita historial para
+          # comparar contra el push anterior.
           fetch-depth: 0
 
-      # ── El gate ────────────────────────────────────────────────────────────
-      # Va en PowerShell, no en bash, por una razón concreta: el runner es
-      # Windows, y ahí `shell: bash` apunta a C:\Windows\system32\bash.exe (el
-      # de WSL), que no está instalado. Tampoco sirve poner la ruta del Git Bash
-      # en `shell:`: el runner intenta resolver {0} como ruta y falla con
-      # "Second path fragment must not be a drive or UNC name".
-      # El paso es cortito, se escribe directo en PowerShell.
       - name: Decidir rebuild vs hotsync
         id: gate
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          function Add-Output($k, $v) {
+            [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$k=$v`n")
+          }
           $before = '${{ github.event.before }}'
           $after  = '${{ github.event.after }}'
-          $salida = $env:GITHUB_OUTPUT
 
           if ([string]::IsNullOrEmpty($before) -or $before -eq ('0' * 40)) {
-            Write-Output "primer push: rebuild (no hay contra que comparar)"
-            "modo=rebuild" | Out-File -FilePath $salida -Append -Encoding utf8
-            "motivo=sin referencia previa" | Out-File -FilePath $salida -Append -Encoding utf8
+            Write-Output "primer push: rebuild (no hay contra qué comparar)"
+            Add-Output 'modo' 'rebuild'
+            Add-Output 'motivo' 'sin referencia previa'
             exit 0
           }
 
@@ -120,9 +107,8 @@ jobs:
           Write-Output "Cambios en este push: $($changed.Count)"
           $changed | ForEach-Object { "  $_" }
 
-          # Lo que de verdad cambia la imagen. El resto (frontend, panel,
-          # estaticos) se publica copiando al contenedor que ya corre, sin
-          # docker build.
+          # Lo que de verdad cambia la imagen. Todo lo demás se publica
+          # copiando al contenedor que ya corre, sin docker build.
           $imagen = @("Dockerfile", "requirements.txt", "api/requirements.txt")
           $tocaba = $changed | Where-Object {
             $f = $_
@@ -131,46 +117,42 @@ jobs:
 
           if ($tocaba) {
             Write-Output "modo=REBUILD: cambiaron $($tocaba -join ', ')"
-            "modo=rebuild" | Out-File -FilePath $salida -Append -Encoding utf8
-            "motivo=cambio un insumo de la imagen" | Out-File -FilePath $salida -Append -Encoding utf8
+            Add-Output 'modo' 'rebuild'
+            Add-Output 'motivo' 'cambio un insumo de la imagen'
           } else {
             Write-Output "modo=HOTSYNC: sin rebuild"
-            "modo=hotsync" | Out-File -FilePath $salida -Append -Encoding utf8
-            "motivo=solo cambio codigo y estaticos" | Out-File -FilePath $salida -Append -Encoding utf8
+            Add-Output 'modo' 'hotsync'
+            Add-Output 'motivo' 'solo cambio codigo y estaticos'
           }
 
       - name: Resumen
-        shell: pwsh
+        shell: powershell
         run: |
-          "### Deploy de Admon" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- **modo**: ${{ steps.gate.outputs.modo }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- **por que**: ${{ steps.gate.outputs.motivo }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- **commit**: ${{ github.sha }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          $s = $env:GITHUB_STEP_SUMMARY
+          [IO.File]::AppendAllText($s, "### Deploy de Admon`n`n")
+          [IO.File]::AppendAllText($s, "- **modo**: ${{ steps.gate.outputs.modo }}`n")
+          [IO.File]::AppendAllText($s, "- **por qué**: ${{ steps.gate.outputs.motivo }}`n")
+          [IO.File]::AppendAllText($s, "- **commit**: ${{ github.sha }}`n")
 
-      # ── Camino rápido ──────────────────────────────────────────────────────
-      # El paso es PowerShell, pero lo que corre es deploy/hotsync.sh con el Git
-      # Bash: el script queda en bash (portable, y es el mismo que se puede
-      # correr a mano) sin depender de que `shell: bash` signifique Git Bash.
       - name: Hotsync
         if: steps.gate.outputs.modo == 'hotsync'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $bash = 'C:\Program Files\Git\bin\bash.exe'
-          if (-not (Test-Path $bash)) { throw "Git Bash no esta en $bash" }
+          if (-not (Test-Path $bash)) { throw "Git Bash no está en $bash" }
           & $bash deploy/hotsync.sh
-          if ($LASTEXITCODE -ne 0) { throw "hotsync.sh fallo (rc=$LASTEXITCODE)" }
+          if ($LASTEXITCODE -ne 0) { throw "hotsync.sh falló (rc=$LASTEXITCODE)" }
 
       # ── Camino completo ────────────────────────────────────────────────────
-      # El rebuild NO se corre desde el checkout del runner: build.ps1 espera el
+      # El rebuild NO se corre desde el checkout del runner: el script espera el
       # clon canónico (C:\admon) y así el contenedor se recrea con la misma
       # configuración de siempre (puertos, red, volumes y credenciales que saca
-      # del contenedor actual con docker inspect). Se lanza la tarea ya
-      # probada, que es además el patrón del ServerVM: por SSH los hijos mueren
-      # al cerrarse la sesión, por eso esto va con schtasks.
+      # del contenedor actual). Y va por schtasks, no por SSH, porque Windows
+      # mata los procesos hijos al cerrarse la sesión.
       - name: Rebuild
         if: steps.gate.outputs.modo == 'rebuild'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Write-Host "Lanzando AdmonBuild (schtasks)…"
@@ -189,6 +171,6 @@ jobs:
               break
             }
           }
-          if ($null -eq $rc) { throw "build.log no mostró 'FIN rc=' en 15 min" }
+          if ($null -eq $rc) { throw "build.log no mostró 'FIN rc=' a tiempo" }
           if ($rc -ne 0) { throw "el rebuild falló (rc=$rc) — ver C:\admon\build.log" }
           Write-Host "OK · imagen reconstruida y contenedor recreado"
