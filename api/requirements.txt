@@ -1,0 +1,39 @@
+# Admon — dependencias del backend (FastAPI)
+# ============================================================================
+# VERSIONES: manda Field. Los pins de abajo son copia de
+# ECCSA-Shell/versiones/requisitos-canonicos.txt (= field/api/requirements.txt).
+# Motivo: Admon y Field comparten BD (ECCSA_Admon), passkeys, push, PDFs y el
+# mismo módulo de Legends, así que deben correr con las mismas versiones.
+#   Si cambiás una versión: primero en Field, después acá, y verificá con
+#   python tools/check_versiones.py
+#
+# 2026-09-27: se quitaron openpyxl, altair, protobuf, pyasn1, cryptography,
+# itsdangerous, jinja2, markupsafe y python-multipart: un escaneo AST de api/
+# confirmó que no se importan (transitivas siguen entrando solas donde toque).
+# ============================================================================
+
+# --- API web (mandato) -------------------------------------------------------
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+pydantic==2.9.0
+python-multipart==0.0.9
+
+# --- Autenticación / passkeys (mandato) --------------------------------------
+pyjwt==2.9.0
+webauthn==3.0.0
+
+# --- Push a las PWAs (mandato) ----------------------------------------------
+pywebpush==2.0.0
+py-vapid==1.9.1
+
+# --- Datos (mandato) --------------------------------------------------------
+pymssql==2.2.11
+pytz
+
+# --- PDFs e imágenes (mandato) ----------------------------------------------
+reportlab==4.4.0
+Pillow==11.0.0
+
+# --- IA (mandato, sin pin en las 3 apps) ------------------------------------
+google-generativeai
+google.ai.generativelanguage
