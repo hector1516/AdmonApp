@@ -1,4 +1,4 @@
-<#
+﻿<#
     register_task.ps1 — Registra la tarea programada "AdmonBuild" para desplegar la app
     con un comando, igual que WorkersBuild en el proyecto de workers.
 

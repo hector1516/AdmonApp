@@ -1,4 +1,4 @@
-<#
+﻿<#
     build.ps1 — Build + deploy de la app Admon (FastAPI + Svelte) en el contenedor `admon`.
 
     Patrón equivalente al de WorkersAdmon: se ejecuta desde la raíz del repo en el
