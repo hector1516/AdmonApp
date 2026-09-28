@@ -4,10 +4,11 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
 
-	// Notas del equipo (HUB_Notas · migración 0040). Tablero interno: todas
-	// las personas logueadas ven las notas y cualquiera puede crear, editar y
-	// borrar; cada nota muestra su autor. Sin permiso propio (igual que ECCSA IA).
-	// El panel resumen vive en el Dashboard (/dashboard).
+	// Notas del equipo → tabla HUB_DashboardNotas, la MISMA que lee la pantalla
+	// 📌 del Dashboard de la oficina (kiosco, dashboard.ecc-sa.com.mx:8101).
+	// El kiosco es solo lectura: lo que se captura acá aparece solo en la TV.
+	// Color = acento de la nota en el kiosco · Fija = sale arriba del todo.
+	// Sin permiso propio (igual que ECCSA IA): todos los logueados.
 
 	let notas = $state([]);
 	let loading = $state(true);
@@ -19,7 +20,19 @@
 	let editandoId = $state(null);
 	let formTitulo = $state('');
 	let formContenido = $state('');
+	let formColor = $state('#F59E0B');
+	let formFija = $state(false);
 	let guardando = $state(false);
+
+	// Paleta de acentos: los mismos tonos que el kiosco usa por defecto.
+	const COLORES = [
+		{ hex: '#F59E0B', nombre: 'Ámbar' },
+		{ hex: '#EF4444', nombre: 'Rojo' },
+		{ hex: '#22C55E', nombre: 'Verde' },
+		{ hex: '#3B82F6', nombre: 'Azul' },
+		{ hex: '#A855F7', nombre: 'Morado' },
+		{ hex: '#94A3B8', nombre: 'Gris' }
+	];
 
 	// La BD guarda hora de México sin offset: se renderiza tal cual (componentes
 	// del string) para que se vea igual en cualquier dispositivo.
@@ -45,6 +58,8 @@
 		editandoId = null;
 		formTitulo = '';
 		formContenido = '';
+		formColor = '#F59E0B';
+		formFija = false;
 		editorAbierto = true;
 		aviso = '';
 	}
@@ -53,6 +68,8 @@
 		editandoId = n.id;
 		formTitulo = n.titulo;
 		formContenido = n.contenido;
+		formColor = n.color || '#F59E0B';
+		formFija = !!n.fija;
 		editorAbierto = true;
 		aviso = '';
 	}
@@ -70,12 +87,18 @@
 		guardando = true;
 		error = '';
 		try {
+			const cuerpo = {
+				titulo: formTitulo,
+				contenido: formContenido,
+				color: formColor,
+				fija: formFija
+			};
 			if (editandoId === null) {
-				const creada = await api.post('/notas', { titulo: formTitulo, contenido: formContenido });
+				const creada = await api.post('/notas', cuerpo);
 				notas = [creada, ...notas];
-				aviso = '✅ Nota creada.';
+				aviso = '✅ Nota creada. Ya aparece en el Dashboard de la oficina.';
 			} else {
-				const editada = await api.put(`/notas/${editandoId}`, { titulo: formTitulo, contenido: formContenido });
+				const editada = await api.put(`/notas/${editandoId}`, cuerpo);
 				notas = notas.map((n) => (n.id === editandoId ? editada : n));
 				aviso = '✅ Nota actualizada.';
 			}
@@ -134,6 +157,26 @@
 			<div class="field">
 				<textarea class="input editor-contenido" rows="6" placeholder="Escribe el contenido…" bind:value={formContenido}></textarea>
 			</div>
+			<div class="editor-opciones">
+				<div class="colores">
+					<span class="opciones-lbl">Color en el Dashboard:</span>
+					{#each COLORES as c}
+						<button
+							type="button"
+							class="color-chip"
+							class:sel={formColor === c.hex}
+							style="--c:{c.hex}"
+							title={c.nombre}
+							aria-label={c.nombre}
+							onclick={() => (formColor = c.hex)}
+						></button>
+					{/each}
+				</div>
+				<label class="fija-check">
+					<input type="checkbox" bind:checked={formFija} />
+					📌 Fijar arriba
+				</label>
+			</div>
 			<div class="editor-acciones">
 				<button class="btn btn-sm btn-primary" onclick={guardar} disabled={guardando || !formTitulo.trim() || !formContenido.trim()}>
 					{guardando ? '⏳ Guardando…' : '💾 Guardar'}
@@ -143,7 +186,7 @@
 		</div>
 	{/if}
 
-	<p class="hint">Notas compartidas del equipo · cada nota muestra quién la escribió · cualquiera puede editarlas o borrarlas</p>
+	<p class="hint">Notas del equipo · cada nota muestra su autor · salen también en la pantalla 📌 del Dashboard de la oficina (solo se muestran las 3 primeras, las fijas van arriba)</p>
 
 	{#if loading}
 		<div class="state">⏳ Cargando notas…</div>
@@ -152,9 +195,9 @@
 	{:else}
 		<div class="notas-lista">
 			{#each notas as n (n.id)}
-				<article class="nota-card">
+				<article class="nota-card" style="--c:{n.color}">
 					<div class="nota-head">
-						<h2 class="nota-titulo">{n.titulo}</h2>
+						<h2 class="nota-titulo">{#if n.fija}<span class="nota-fija">📌 fija</span>{/if}{n.titulo}</h2>
 						<div class="nota-acciones">
 							<button class="btn-icon" onclick={() => abrirEditar(n)} title="Editar">✏️</button>
 							<button class="btn-icon" onclick={() => borrar(n)} title="Borrar">🗑️</button>
@@ -163,7 +206,7 @@
 					<div class="nota-contenido">{n.contenido}</div>
 					<div class="nota-meta">
 						<span class="nota-autor">👤 {n.autor}</span>
-						<span>🕒 {fmtFecha(n.fecha_creacion)}{n.fecha_actualizado ? ` · editada ${fmtFecha(n.fecha_actualizado)}` : ''}</span>
+						<span>🕒 {fmtFecha(n.fecha_creacion)}{n.fecha_modificado ? ` · editada ${fmtFecha(n.fecha_modificado)}` : ''}</span>
 					</div>
 				</article>
 			{/each}
@@ -193,14 +236,46 @@
 	.editor .field { margin-bottom: 0.6rem; }
 	.editor-contenido { resize: vertical; min-height: 120px; line-height: 1.5; }
 	.editor-acciones { display: flex; gap: 0.5rem; }
+	.editor-opciones {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.6rem;
+		margin-bottom: 0.75rem;
+	}
+	.colores { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+	.opciones-lbl { font-size: 0.72rem; color: var(--color-text-muted); margin-right: 0.15rem; }
+	.color-chip {
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+		background: var(--c);
+		border: 2px solid transparent;
+		cursor: pointer;
+		padding: 0;
+	}
+	.color-chip.sel { border-color: var(--color-text); box-shadow: 0 0 0 2px var(--c); }
+	.fija-check { display: flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; cursor: pointer; }
 
 	/* Lista de notas */
 	.notas-lista { display: flex; flex-direction: column; gap: 0.8rem; }
 	.nota-card {
 		background: var(--color-surface);
 		border: 1px solid rgba(255, 255, 255, 0.06);
+		border-left: 5px solid var(--c, #F59E0B);
 		border-radius: 14px;
 		padding: 0.9rem 1rem;
+	}
+	.nota-fija {
+		font-size: 0.62rem;
+		font-weight: 700;
+		color: var(--color-text-muted);
+		background: rgba(255, 255, 255, 0.08);
+		padding: 0.15rem 0.45rem;
+		border-radius: 999px;
+		margin-right: 0.4rem;
+		vertical-align: middle;
 	}
 	.nota-head { display: flex; align-items: flex-start; gap: 0.5rem; }
 	.nota-titulo { font-size: 1rem; margin: 0; flex: 1; line-height: 1.3; }

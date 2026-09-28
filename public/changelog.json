@@ -2,7 +2,7 @@
   "app": "admon",
   "version": "1.2.0",
   "cambios": [
-    "📝 Nuevo módulo Notas: un tablero de notas del equipo con autor, fecha, editor para crearlas y botones para editarlas o borrarlas — y las más recientes aparecen directo en el Dashboard.",
+    "📝 Nuevo módulo Notas: notas del equipo con autor, color, 📌 fijar y editor; se capturan en Admon y aparecen solas en la pantalla 📌 del Dashboard de la oficina.",
     "🤖 ECCSA IA: ahora es una sola conversación continua con historial, y su botón está directo en el Dashboard.",
     "🚗 En Kilómetros, tocar un vehículo abre su detalle en una página propia (antes en ventana emergente) y se puede compartir como enlace.",
     "🕒 Los registros de kilometraje guardan siempre la hora de México (antes algunos salían 6 horas adelantados) y ya no dejan capturar fechas futuras."

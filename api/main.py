@@ -4790,47 +4790,70 @@ async def kilometros_registro(body: KilometroRegistroReq,
         conn.close()
 
 
-# --- Notas del equipo (módulo Notas + panel en el Dashboard de Admon) ---
-# Tabla HUB_Notas (migración 0040). Sin permiso propio: todas las personas
-# logueadas pueden verlas; cualquiera puede crear/editar/borrar (tablero
-# interno) y cada nota siempre muestra su autor (IdUsuario → HUB_Users).
+# --- Notas del equipo (módulo Notas de Admon → pantalla 📌 del Dashboard) ---
+# Tabla HUB_DashboardNotas: la MISMA que lee el kiosco de la TV
+# (dashboard.ecc-sa.com.mx:8101, api/datos.py → notas()). El kiosco es solo
+# lectura; el CRUD vive acá. Por eso las notas que se capturan en Admon
+# aparecen solas en la pantalla de la oficina.
+#   Color  = acento en la nota (hex #RRGGBB; el kiosco usa #F59E0B si viene vacío)
+#   Fija   = las fijas salen primero en el kiosco
+#   Autor  = nombre del usuario al momento de crearla (varchar, no FK)
+# Sin permiso propio: todos los logueados ven y editan el tablero.
+
+COLOR_NOTA_DEFECTO = "#F59E0B"
+
 
 class NotaCrear(BaseModel):
     titulo: str
     contenido: str
+    color: str = COLOR_NOTA_DEFECTO
+    fija: bool = False
 
 
 class NotaActualizar(BaseModel):
     titulo: str
     contenido: str
+    color: str = COLOR_NOTA_DEFECTO
+    fija: bool = False
+
+
+def _color_nota(valor) -> str:
+    """Solo #RRGGBB o #RGB; cualquier otra cosa cae al ámbar del kiosco."""
+    s = str(valor or "").strip()
+    if s.startswith("#"):
+        hexa = s[1:]
+        if all(c in "0123456789abcdefABCDEF" for c in hexa) and len(hexa) in (3, 6):
+            return s
+    return COLOR_NOTA_DEFECTO
 
 
 def _nota_desde_row(r: dict) -> dict:
-    """Normaliza una fila de HUB_Notas al JSON que consume el front."""
+    """Normaliza una fila de HUB_DashboardNotas al JSON que consume el front."""
     return {
         "id": int(r["Id"]),
         "titulo": r["Titulo"],
-        "contenido": r["Contenido"],
-        "id_usuario": int(r["IdUsuario"]),
-        "autor": r.get("Autor") or "—",
+        "contenido": r["Contenido"] or "",
+        "color": r["Color"] or COLOR_NOTA_DEFECTO,
+        "autor": r["Autor"] or "—",
+        "fija": bool(r["Fija"]),
         "fecha_creacion": r["FechaCreacion"].isoformat() if r["FechaCreacion"] else None,
-        "fecha_actualizado": r["FechaActualizado"].isoformat() if r["FechaActualizado"] else None,
+        "fecha_modificado": r["FechaModificado"].isoformat() if r["FechaModificado"] else None,
     }
 
 
 @app.get("/api/notas")
 async def notas_listar(current_user: dict = Depends(get_current_user)):
-    """Notas compartidas con su autor (más reciente arriba)."""
+    """Notas del tablero, en el mismo orden que las ve el kiosco (fijas primero)."""
     conn = get_connection()
     try:
         cursor = conn.cursor(as_dict=True)
         cursor.execute("""
-            SELECT n.Id, n.Titulo, n.Contenido, n.IdUsuario,
-                   n.FechaCreacion, n.FechaActualizado,
-                   u.Nombre AS Autor
-            FROM HUB_Notas n
-            LEFT JOIN HUB_Users u ON u.Id = n.IdUsuario
-            ORDER BY ISNULL(n.FechaActualizado, n.FechaCreacion) DESC, n.Id DESC
+            SELECT Id, Titulo, Contenido, Color, Autor, Fija,
+                   FechaCreacion, FechaModificado
+            FROM HUB_DashboardNotas
+            ORDER BY ISNULL(Fija, 0) DESC,
+                     ISNULL(FechaModificado, FechaCreacion) DESC,
+                     Id DESC
         """)
         return [_nota_desde_row(r) for r in cursor.fetchall()]
     except Exception as e:
@@ -4841,7 +4864,7 @@ async def notas_listar(current_user: dict = Depends(get_current_user)):
 
 @app.post("/api/notas")
 async def notas_crear(body: NotaCrear, current_user: dict = Depends(get_current_user)):
-    """Crea una nota a nombre del usuario logueado."""
+    """Crea una nota; el autor es el usuario logueado."""
     titulo = (body.titulo or "").strip()
     contenido = (body.contenido or "").strip()
     if not titulo:
@@ -4851,18 +4874,19 @@ async def notas_crear(body: NotaCrear, current_user: dict = Depends(get_current_
     conn = get_connection()
     try:
         cursor = conn.cursor(as_dict=True)
-        cursor.execute(
-            "INSERT INTO HUB_Notas (Titulo, Contenido, IdUsuario) VALUES (%s, %s, %s)",
-            (titulo[:200], contenido, int(current_user["id"])))
+        cursor.execute("""
+            INSERT INTO HUB_DashboardNotas
+                (Titulo, Contenido, Color, Autor, Fija, FechaCreacion, FechaModificado)
+            VALUES (%s, %s, %s, %s, %s, GETDATE(), GETDATE())
+        """, (titulo[:200], contenido, _color_nota(body.color),
+              str(current_user.get("nombre") or "")[:100], 1 if body.fija else 0))
         conn.commit()
         cursor.execute("SELECT SCOPE_IDENTITY() AS id")
         nuevo_id = int(cursor.fetchone()["id"])
         cursor.execute("""
-            SELECT n.Id, n.Titulo, n.Contenido, n.IdUsuario,
-                   n.FechaCreacion, n.FechaActualizado, u.Nombre AS Autor
-            FROM HUB_Notas n
-            LEFT JOIN HUB_Users u ON u.Id = n.IdUsuario
-            WHERE n.Id = %s
+            SELECT Id, Titulo, Contenido, Color, Autor, Fija,
+                   FechaCreacion, FechaModificado
+            FROM HUB_DashboardNotas WHERE Id = %s
         """, (nuevo_id,))
         return _nota_desde_row(cursor.fetchone())
     except Exception as e:
@@ -4874,7 +4898,7 @@ async def notas_crear(body: NotaCrear, current_user: dict = Depends(get_current_
 @app.put("/api/notas/{id_nota:int}")
 async def notas_editar(id_nota: int, body: NotaActualizar,
                        current_user: dict = Depends(get_current_user)):
-    """Edita título/contenido; actualiza FechaActualizado (queda como la más reciente)."""
+    """Edita la nota; actualiza FechaModificado (sube en el orden del kiosco)."""
     titulo = (body.titulo or "").strip()
     contenido = (body.contenido or "").strip()
     if not titulo:
@@ -4884,21 +4908,21 @@ async def notas_editar(id_nota: int, body: NotaActualizar,
     conn = get_connection()
     try:
         cursor = conn.cursor(as_dict=True)
-        cursor.execute("SELECT Id FROM HUB_Notas WHERE Id = %s", (id_nota,))
+        cursor.execute("SELECT Id FROM HUB_DashboardNotas WHERE Id = %s", (id_nota,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="La nota no existe.")
         cursor.execute("""
-            UPDATE HUB_Notas
-            SET Titulo = %s, Contenido = %s, FechaActualizado = GETDATE()
+            UPDATE HUB_DashboardNotas
+            SET Titulo = %s, Contenido = %s, Color = %s, Fija = %s,
+                FechaModificado = GETDATE()
             WHERE Id = %s
-        """, (titulo[:200], contenido, id_nota))
+        """, (titulo[:200], contenido, _color_nota(body.color),
+              1 if body.fija else 0, id_nota))
         conn.commit()
         cursor.execute("""
-            SELECT n.Id, n.Titulo, n.Contenido, n.IdUsuario,
-                   n.FechaCreacion, n.FechaActualizado, u.Nombre AS Autor
-            FROM HUB_Notas n
-            LEFT JOIN HUB_Users u ON u.Id = n.IdUsuario
-            WHERE n.Id = %s
+            SELECT Id, Titulo, Contenido, Color, Autor, Fija,
+                   FechaCreacion, FechaModificado
+            FROM HUB_DashboardNotas WHERE Id = %s
         """, (id_nota,))
         return _nota_desde_row(cursor.fetchone())
     except HTTPException:
@@ -4911,11 +4935,11 @@ async def notas_editar(id_nota: int, body: NotaActualizar,
 
 @app.delete("/api/notas/{id_nota:int}")
 async def notas_borrar(id_nota: int, current_user: dict = Depends(get_current_user)):
-    """Borra una nota."""
+    """Borra una nota (desaparece de la pantalla del kiosco)."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM HUB_Notas WHERE Id = %s", (id_nota,))
+        cursor.execute("DELETE FROM HUB_DashboardNotas WHERE Id = %s", (id_nota,))
         if cursor.rowcount == 0:
             conn.commit()
             raise HTTPException(status_code=404, detail="La nota no existe.")
@@ -4927,7 +4951,6 @@ async def notas_borrar(id_nota: int, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         conn.close()
-
 
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
 # El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque

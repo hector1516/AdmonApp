@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
-	import { api } from '$lib/api.js';
 	import ActionsBar from '../components/ActionsBar.svelte';
 
 	// Menú de módulos estilo home de Field: icon/title/desc/path/perm.
@@ -25,26 +24,6 @@
 	];
 
 	let user = $state(null);
-
-	// Panel de notas en el Dashboard (las más recientes; el módulo completo
-	// está en /notas). Si falla la carga, simplemente no se muestra el panel.
-	let notas = $state([]);
-
-	// La BD guarda hora de México sin offset → se renderiza tal cual.
-	function fmtFecha(iso) {
-		if (!iso) return '—';
-		const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
-		if (m) return `${m[3]}/${m[2]} ${m[4]}:${m[5]}`;
-		return '—';
-	}
-
-	async function cargarNotas() {
-		try {
-			notas = ((await api.get('/notas')) || []).slice(0, 6);
-		} catch {
-			notas = [];
-		}
-	}
 
 	function visible(mod) {
 		return !mod.perm || (user && user[mod.perm]);
@@ -70,7 +49,6 @@
 		} catch {
 			user = null;
 		}
-		await cargarNotas();
 	});
 </script>
 
@@ -99,25 +77,6 @@
 			{/if}
 		{/each}
 	</div>
-
-	<!-- Panel de notas: las más recientes, con autor. Toca → módulo Notas. -->
-	{#if notas.length > 0}
-		<div class="notas-panel">
-			<div class="notas-panel-head">
-				<span class="notas-panel-title">📝 Notas del equipo</span>
-				<button class="notas-ver" on:click={() => navigate('/notas')}>Ver todas →</button>
-			</div>
-			<div class="notas-mini-grid">
-				{#each notas as n (n.id)}
-					<button class="nota-mini" on:click={() => navigate('/notas')} title={n.titulo}>
-						<span class="nota-mini-titulo">{n.titulo}</span>
-						<span class="nota-mini-texto">{n.contenido}</span>
-						<span class="nota-mini-meta">👤 {n.autor} · 🕒 {fmtFecha(n.fecha_creacion)}</span>
-					</button>
-				{/each}
-			</div>
-		</div>
-	{/if}
 </div>
 
 <style>
@@ -139,56 +98,4 @@
 	.module-title { font-weight: 700; font-size: 0.95rem; line-height: 1.25; min-height: 2.4em; display: flex; align-items: center; }
 	.module-desc { font-size: 0.75rem; color: var(--color-text-muted); line-height: 1.3; min-height: 2.6em; }
 
-	/* Panel de notas del Dashboard */
-	.notas-panel {
-		margin-top: 1.25rem;
-		background: var(--color-surface);
-		border: 1px solid rgba(255, 255, 255, 0.05);
-		border-radius: 16px;
-		padding: 0.9rem 1rem 1rem;
-	}
-	.notas-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.7rem; }
-	.notas-panel-title { font-weight: 700; font-size: 0.95rem; }
-	.notas-ver {
-		background: transparent;
-		border: none;
-		color: var(--color-primary);
-		font-size: 0.78rem;
-		font-weight: 600;
-		cursor: pointer;
-		font-family: inherit;
-		padding: 0.2rem 0.3rem;
-	}
-	.notas-mini-grid { display: grid; grid-template-columns: 1fr; gap: 0.55rem; }
-	.nota-mini {
-		display: flex;
-		flex-direction: column;
-		gap: 0.2rem;
-		text-align: left;
-		background: var(--color-background);
-		border: 1px solid rgba(255, 255, 255, 0.06);
-		border-radius: 10px;
-		padding: 0.6rem 0.75rem;
-		cursor: pointer;
-		font-family: inherit;
-		color: var(--color-text);
-		transition: border-color 0.12s;
-	}
-	.nota-mini:hover { border-color: var(--color-primary); }
-	.nota-mini-titulo { font-weight: 700; font-size: 0.85rem; line-height: 1.3; }
-	.nota-mini-texto {
-		font-size: 0.76rem;
-		color: var(--color-text-muted);
-		line-height: 1.4;
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-		white-space: pre-wrap;
-		word-wrap: break-word;
-	}
-	.nota-mini-meta { font-size: 0.68rem; color: var(--color-text-muted); margin-top: 0.15rem; }
-	@media (min-width: 700px) {
-		.notas-mini-grid { grid-template-columns: 1fr 1fr; }
-	}
 </style>

@@ -6,15 +6,17 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
-- **Módulo Notas** (📝): tablero interno de notas del equipo con editor en
-  panel (título + contenido), edición y borrado; cada nota muestra su autor y
-  su fecha. Nueva tabla `HUB_Notas` (migración `0040_notas.sql`), endpoints
-  `GET/POST/PUT/DELETE /api/notas` (sin permiso propio, para todos los
-  logueados) y página `src/pages/Notas.svelte` con tarjeta en el menú del
-  Dashboard y ruta `/notas` (incluida en `_SPA_ROUTES` y en el prefetch
-  offline).
-- **Panel de notas en el Dashboard**: las 6 notas más recientes con título,
-  contenido, autor y fecha; tocarlas abre el módulo (`src/pages/Dashboard.svelte`).
+- **Módulo Notas** (📝): tablero de notas del equipo con editor en panel
+  (título, contenido, color y 📌 fijar), edición y borrado; cada nota muestra
+  su autor y su fecha. Escribe en **`HUB_DashboardNotas`**, la misma tabla que
+  lee la pantalla 📌 del Dashboard de la oficina (kiosco, solo lectura): lo que
+  se captura en Admon aparece solo en la TV, con las fijas arriba y las 3
+  primeras. Endpoints `GET/POST/PUT/DELETE /api/notas` (sin permiso propio,
+  para todos los logueados) y página `src/pages/Notas.svelte` con tarjeta en el
+  menú y ruta `/notas` (en `_SPA_ROUTES` y en el prefetch offline).
+  Migración `0041_dashboard_notas.sql`: crea la tabla si falta (en producción ya
+  existía, creada a mano y sin versionar; por eso la base de pruebas no la
+  tenía).
 - **ECCSA IA**: chat de una sola conversación (historial continuo en una
   conversación, con Markdown en las respuestas) y acceso directo desde el
   primer botón del Dashboard. `src/pages/EccsaIa.svelte`, `src/pages/Dashboard.svelte`.
