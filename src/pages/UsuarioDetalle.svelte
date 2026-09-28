@@ -70,6 +70,22 @@
 	let accesos = $state({});
 	let isSelf = $state(false);
 
+	// Teléfono / MAC: se guarda en HUB_NetworkDevices (la tabla del escáner de
+	// red 📡 que mide entradas y salidas de la oficina), vinculada por IdUsuario.
+	let macTel = $state('');
+	let macNombre = $state('');
+	let tel = $state(null); // estado del dispositivo + presencia (AQUI/FUERA)
+	let busyMac = $state(false);
+	let msgMac = $state('');
+	let errMac = $state('');
+
+	function fmtFecha(iso) {
+		if (!iso) return '—';
+		const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+		if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+		return '—';
+	}
+
 	function apiHeaders() {
 		return { 'Content-Type': 'application/json', ...auth.authHeader() };
 	}
@@ -117,6 +133,14 @@
 			for (const g of Object.values(PERM_GROUPS)) for (const [k] of g) a[k] = !!d[k];
 			accesos = a;
 			isSelf = (email || '').trim().toLowerCase() === myEmail();
+			// MAC del teléfono (HUB_NetworkDevices); si falla no bloquea la ficha
+			try {
+				tel = await api.get(`/users/${id}/telefono`);
+				macTel = tel?.mac || '';
+				macNombre = tel?.nombre_dispositivo || '';
+			} catch (e2) {
+				console.error('Error cargando MAC:', e2);
+			}
 		} catch (e) {
 			console.error('Error cargando usuario:', e);
 			error = e.message === 'Sesión expirada' ? e.message : `No se pudo cargar: ${e.message || 'sin detalle'}`;
@@ -154,6 +178,31 @@
 			error = e.message || 'Error al actualizar.';
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function guardarMac() {
+		msgMac = '';
+		errMac = '';
+		busyMac = true;
+		try {
+			const res = await fetch(`/api/users/${id}/telefono`, {
+				method: 'PUT',
+				headers: apiHeaders(),
+				body: JSON.stringify({ mac: macTel.trim(), nombre_dispositivo: macNombre.trim() })
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(data.detail || 'Error al guardar la MAC.');
+			tel = data;
+			macTel = data.mac || '';
+			macNombre = data.nombre_dispositivo || '';
+			msgMac = data.mac
+				? '✅ MAC vinculada. El escáner 📡 ya puede medir sus entradas y salidas.'
+				: '✅ Teléfono desvinculado (el historial se conserva).';
+		} catch (e) {
+			errMac = e.message || 'Error al guardar la MAC.';
+		} finally {
+			busyMac = false;
 		}
 	}
 
@@ -212,6 +261,57 @@
 		</div>
 
 		<div class="card" style="margin-bottom: 0.75rem;">
+			<div class="card-title">📱 MAC del teléfono</div>
+			<p class="hint" style="margin: 0 0 0.6rem;">
+				📡 Detección de Red: con esta MAC el escáner mide las <b>entradas y salidas</b> de la
+				oficina. Los iPhone con “dirección Wi-Fi privada” rotan su MAC: si deja de detectarse,
+				vuelve a anotarla aquí.
+			</p>
+			<div class="field">
+				<label for="ud-mac">MAC del celular:</label>
+				<input
+					id="ud-mac"
+					class="input"
+					placeholder="EE:E2:FD:A3:43:EC"
+					bind:value={macTel}
+					on:blur={() => (macTel = macTel.trim().toUpperCase())}
+				/>
+			</div>
+			<div class="field">
+				<label for="ud-mac-nombre">Nombre del dispositivo (opcional):</label>
+				<input id="ud-mac-nombre" class="input" placeholder="Ej: iPhone Héctor" bind:value={macNombre} />
+			</div>
+
+			{#if tel && tel.id_dispositivo}
+				<div class="tel-estado">
+					{#if tel.estado === 'AQUI'}
+						<span class="tel-chip tel-aqui">🟢 En la oficina</span>
+					{:else}
+						<span class="tel-chip">⚪ Fuera</span>
+					{/if}
+					{#if tel.ultimo_evento}
+						<span class="tel-chip">
+							{tel.ultimo_evento.tipo === 'ENTRADA' ? '⬅️ Última entrada' : '➡️ Última salida'}:
+							{fmtFecha(tel.ultimo_evento.fecha)}
+						</span>
+					{/if}
+					{#if tel.ultima_vez_en_red}
+						<span class="tel-chip">📶 Visto: {fmtFecha(tel.ultima_vez_en_red)}</span>
+					{/if}
+				</div>
+			{:else}
+				<p class="hint" style="margin: 0 0 0.6rem;">➕ Sin MAC registrada — anóntala para empezar a medir su asistencia.</p>
+			{/if}
+
+			{#if errMac}<div class="msg err">{errMac}</div>{/if}
+			{#if msgMac}<div class="msg ok">{msgMac}</div>{/if}
+
+			<button class="btn btn-secondary btn-block" on:click={guardarMac} disabled={busyMac}>
+				{busyMac ? 'Guardando…' : macTel.trim() ? '💾 Guardar MAC' : '💾 Desvincular teléfono'}
+			</button>
+		</div>
+
+		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">🔑 Permisos</div>
 			{#each Object.entries(PERM_GROUPS) as [grupo, perms]}
 				<p style="font-weight: 700; font-size: 0.85rem; margin: 0.75rem 0 0.35rem;">{grupo}</p>
@@ -249,5 +349,17 @@
 	.check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; margin-bottom: 0.5rem; cursor: pointer; }
 	.check input { width: 1.1rem; height: 1.1rem; }
 	.hint { font-size: 0.8rem; color: var(--color-text-muted); }
+	.tel-estado { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
+	.tel-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.75rem;
+		padding: 0.25rem 0.55rem;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.06);
+		color: var(--color-text-muted);
+	}
+	.tel-aqui { background: rgba(34, 197, 94, 0.14); color: #22C55E; }
 	.card { margin-bottom: 0.75rem; }
 </style>

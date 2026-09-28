@@ -6,6 +6,17 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **MAC del teléfono en Usuarios** (📡): la ficha de usuario tiene un campo
+  nuevo para anotar la MAC del celular, que se guarda/relaciona en
+  `HUB_NetworkDevices` (la tabla del escáner de Detección de Red, por
+  `IdUsuario`) — así se empieza a medir **entradas y salidas de la oficina**.
+  El detalle muestra el estado en vivo (🟢 en la oficina / ⚪ fuera), el último
+  evento de entrada/salida y la última vez visto en la red; la lista de
+  usuarios muestra el badge `📡 MAC`. Upsert sin borrar historia: quitar la
+  MAC solo desvincula (`Activo = 0`) porque `HUB_NetworkPresence` y
+  `HUB_NetworkState` tienen FK hacia esa fila. Se rechaza con 400 si la MAC ya
+  pertenece a otro usuario activo. Endpoints `GET/PUT
+  /api/users/{id}/telefono` + `mac_telefono` en `GET /api/users`.
 - **Módulo Notas** (📝): tablero de notas del equipo con editor en panel
   (título, contenido, color y 📌 fijar), edición y borrado; cada nota muestra
   su autor y su fecha. Escribe en **`HUB_DashboardNotas`**, la misma tabla que

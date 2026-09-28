@@ -69,6 +69,9 @@
 						<div style="font-size: 0.8rem; color: var(--color-text-muted);">{u.email}</div>
 					</div>
 					<div style="display:flex;align-items:center;gap:0.5rem;">
+						{#if u.mac_telefono}
+							<span class="badge badge-mac" title="MAC del teléfono (Detección de Red 📡)">📡 {u.mac_telefono}</span>
+						{/if}
 						{#if u.acceso_usuarios}
 							<span class="badge badge-warning">admin</span>
 						{:else}

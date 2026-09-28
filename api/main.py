@@ -110,6 +110,7 @@ class UserInfo(BaseModel):
     acceso_ia: bool = False
     acceso_vales_oxxogas: bool = False
     nickname: str = ""
+    mac_telefono: str = ""
 
 
 # --- Auth Dependency ---
@@ -461,6 +462,13 @@ async def get_users(current_user: dict = Depends(get_current_user)):
         cursor = conn.cursor()
         cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users")
         rows = cursor.fetchall()
+        # MAC del celular por usuario (para el badge 📡 de la lista);
+        # solo activas: es lo que el escáner mide para entradas/salidas.
+        cursor.execute("""
+            SELECT IdUsuario, MACAddress FROM HUB_NetworkDevices
+            WHERE Activo = 1 AND Tipo = 'CELULAR' AND IdUsuario IS NOT NULL
+        """)
+        macs = {r[0]: (r[1] or "").strip() for r in cursor.fetchall()}
         conn.close()
         result = []
         for row in rows:
@@ -473,6 +481,7 @@ async def get_users(current_user: dict = Depends(get_current_user)):
                 acceso_oc=row[7] == 1,
                 acceso_calculo=row[8] == 1,
                 acceso_usuarios=row[10] == 1,
+                mac_telefono=macs.get(row[0], ""),
             ))
         return result
     except Exception as e:
@@ -633,6 +642,207 @@ async def delete_user_detail(user_id: int, current_user: dict = Depends(get_curr
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# --- Teléfono / MAC del usuario (relación con HUB_NetworkDevices) ---
+# La tabla HUB_NetworkDevices es la que usa el escáner de red (módulo Detección
+# de Red 📡) para medir ENTRADAS y SALIDAS de la oficina: si la MAC del celular
+# aparece en la red, el usuario está aquí. Aquí solo se gestiona la fila
+# vinculada al usuario (IdUsuario); nunca se borra (HUB_NetworkPresence y
+# HUB_NetworkState tienen FK hacia ella) — al quitar la MAC se desvincula y se
+# marca Activo = 0, así el historial de eventos queda intacto.
+
+def _normalizar_mac(valor) -> Optional[str]:
+    """'aa-bb-cc-dd-ee-ff' / 'aabbccddeeff' / 'aabb.ccdd.eeff' → 'AA:BB:CC:DD:EE:FF'.
+
+    Devuelve None si no son 12 dígitos hexadecimales (formato que espera
+    HUB_NetworkDevices.MACAddress, varchar(17)).
+    """
+    s = (valor or "").strip().upper().replace(":", "").replace("-", "").replace(".", "")
+    if len(s) != 12 or any(c not in "0123456789ABCDEF" for c in s):
+        return None
+    return ":".join(s[i:i + 2] for i in range(0, 12, 2))
+
+
+def _telefono_del_usuario(user_id: int, conn=None) -> dict:
+    """Lee el celular vinculado al usuario + su presencia en la red.
+
+    Devuelve siempre la misma forma aunque no haya MAC: la página la usa tanto
+    para pintar el formulario como para mostrar 'AQUI/FUERA' y el último
+    evento de entrada/salida.
+    """
+    propia = conn is None
+    if propia:
+        conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT Id, MACAddress, NombreDispositivo, Activo, FechaRegistro
+            FROM HUB_NetworkDevices
+            WHERE IdUsuario = %s AND Tipo = 'CELULAR'
+            ORDER BY Activo DESC, FechaRegistro DESC, Id DESC
+        """, (int(user_id),))
+        devs = cursor.fetchall()
+        dev = next((d for d in devs if d["Activo"]), (devs[0] if devs else None))
+        out = {
+            "id_dispositivo": int(dev["Id"]) if dev else None,
+            "mac": (dev["MACAddress"] or "").strip() if dev else "",
+            "nombre_dispositivo": (dev["NombreDispositivo"] or "").strip() if dev else "",
+            "activo": bool(dev["Activo"]) if dev else False,
+            "estado": None,
+            "ultima_vez_en_red": None,
+            "ultimo_evento": None,
+        }
+        if not dev:
+            return out
+        # Estado en vivo del escáner (AQUI = detectado en la última red)
+        cursor.execute("""
+            SELECT Estado, UltimaVezEnRed FROM HUB_NetworkState
+            WHERE IdDispositivo = %s
+        """, (int(dev["Id"]),))
+        st = cursor.fetchone()
+        if st:
+            out["estado"] = st["Estado"]
+            out["ultima_vez_en_red"] = st["UltimaVezEnRed"].isoformat() if st["UltimaVezEnRed"] else None
+        # Último evento de presencia (ENTRADA / SALIDA)
+        cursor.execute("""
+            SELECT TOP 1 TipoEvento, FechaHora FROM HUB_NetworkPresence
+            WHERE IdDispositivo = %s ORDER BY Id DESC
+        """, (int(dev["Id"]),))
+        ev = cursor.fetchone()
+        if ev:
+            out["ultimo_evento"] = {
+                "tipo": ev["TipoEvento"],
+                "fecha": ev["FechaHora"].isoformat() if ev["FechaHora"] else None,
+            }
+        return out
+    finally:
+        if propia:
+            conn.close()
+
+
+class TelefonoMacRequest(BaseModel):
+    mac: str = ""
+    nombre_dispositivo: str = ""
+
+
+@app.get("/api/users/{user_id:int}/telefono")
+async def get_user_telefono(user_id: int, current_user: dict = Depends(get_current_user)):
+    """MAC del celular vinculado + estado de presencia (¿está en la oficina?)."""
+    _require_admin(current_user)
+    try:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT Id FROM HUB_Users WHERE Id = %s", (int(user_id),))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            return _telefono_del_usuario(user_id, conn)
+        finally:
+            conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.put("/api/users/{user_id:int}/telefono")
+async def set_user_telefono(user_id: int, body: TelefonoMacRequest,
+                            current_user: dict = Depends(get_current_user)):
+    """Vincula (o desvincula) la MAC del celular al usuario.
+
+    Upsert sobre HUB_NetworkDevices:
+      · MAC vacía        → desvincula el celular del usuario (Activo = 0,
+                           IdUsuario = NULL); NO se borra la fila porque
+                           HUB_NetworkPresence/HUB_NetworkState dependen de ella.
+      · MAC ya en uso    → si es de OTRO usuario activo, 400 (evita que dos
+                           personas midan la misma MAC).
+      · MAC existente    → se reutiliza la fila (realectiva si estaba apagada).
+      · MAC nueva        → si el usuario tenía otra fila CELULAR se le cambia
+                           la MAC; si no, se inserta una fila nueva.
+    """
+    _require_admin(current_user)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT Id, Nombre FROM HUB_Users WHERE Id = %s", (int(user_id),))
+        user = cursor.fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        nombre = (body.nombre_dispositivo or "").strip()
+        mac = (body.mac or "").strip()
+
+        # 1) MAC vacía → desvincular sin borrar historial
+        if not mac:
+            cursor.execute("""
+                UPDATE HUB_NetworkDevices SET Activo = 0, IdUsuario = NULL
+                WHERE IdUsuario = %s AND Tipo = 'CELULAR'
+            """, (int(user_id),))
+            conn.commit()
+            return {"ok": True, **_telefono_del_usuario(user_id, conn)}
+
+        # 2) validar formato
+        normalizada = _normalizar_mac(mac)
+        if not normalizada:
+            raise HTTPException(status_code=400, detail="MAC inválida: usa 12 dígitos hex (ej. EE:E2:FD:A3:43:EC).")
+
+        # 3) ¿ya la usa OTRO usuario activo?
+        cursor.execute("""
+            SELECT TOP 1 d.Id, d.IdUsuario, u.Nombre
+            FROM HUB_NetworkDevices d
+            LEFT JOIN HUB_Users u ON u.Id = d.IdUsuario
+            WHERE LTRIM(RTRIM(d.MACAddress)) = %s AND d.Activo = 1
+              AND d.IdUsuario IS NOT NULL AND d.IdUsuario <> %s
+        """, (normalizada, int(user_id)))
+        otra = cursor.fetchone()
+        if otra:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Esa MAC ya está registrada a {(otra['Nombre'] or '').strip() or 'otro usuario'}. "
+                       f"Quítala primero desde su ficha de usuario.",
+            )
+
+        # 4) upsert: reactivar fila con esa MAC / cambiar la MAC del usuario / insertar
+        cursor.execute("""
+            SELECT Id FROM HUB_NetworkDevices
+            WHERE LTRIM(RTRIM(MACAddress)) = %s
+            ORDER BY Activo DESC, Id DESC
+        """, (normalizada,))
+        existente = cursor.fetchone()
+        if existente:
+            sets, vals = ["MACAddress = %s", "IdUsuario = %s", "Activo = 1"], [normalizada, int(user_id)]
+        else:
+            cursor.execute("""
+                SELECT TOP 1 Id FROM HUB_NetworkDevices
+                WHERE IdUsuario = %s AND Tipo = 'CELULAR'
+                ORDER BY Activo DESC, Id DESC
+            """, (int(user_id),))
+            previo = cursor.fetchone()
+            if previo:
+                sets, vals = ["MACAddress = %s", "Activo = 1"], [normalizada]
+                existente = previo
+            else:
+                sets, vals = ["MACAddress = %s", "IdUsuario = %s", "Activo = 1", "FechaRegistro = GETDATE()"],                              [normalizada, int(user_id)]
+        if nombre:
+            sets.append("NombreDispositivo = %s")
+            vals.append(nombre[:100])
+        if existente:
+            cursor.execute(f"UPDATE HUB_NetworkDevices SET {', '.join(sets)} WHERE Id = %s",
+                           tuple(vals + [int(existente["Id"])]))
+        else:
+            cursor.execute(f"""
+                INSERT INTO HUB_NetworkDevices (MACAddress, NombreDispositivo, IdUsuario, Tipo, Activo)
+                VALUES (%s, %s, %s, 'CELULAR', 1)
+            """, (normalizada, nombre[:100] or None, int(user_id)))
+        conn.commit()
+        return {"ok": True, **_telefono_del_usuario(user_id, conn)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
 
 
 # --- Inventory endpoints ---
