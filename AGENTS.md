@@ -96,6 +96,18 @@ Las 3 apps comparten BD, passkeys (RP raíz `ecc-sa.com.mx`), push y PDFs, así
 que las versiones de `api/requirements.txt` las manda Field. Ver
 `ECCSA-Shell/docs/VERSIONES.md`.
 
+### Migraciones de BD
+
+Los cambios de esquema de `ECCSA_Admon` viven en **`migrations/` de ESTE
+repo** (`.sql` numerado, ej. `0040_notas.sql`). El repo HUB (`hector1516/Admon`)
+ya no se usa (2026-09-28): no meter migraciones ahí — un push a ese repo
+dispara su workflow y **recrea el contenedor `hub_python` sin motivo**.
+
+Convención al aplicar (no hay runner todavía):
+1. Ejecutar el `.sql` contra la BD (`pymssql`, `autocommit=True`).
+2. Registrarlo: `INSERT INTO schema_migrations (version) VALUES ('NNNN_nombre.sql')`.
+3. Pruebas primero (`ECCSA_Admon_Pruebas`), después producción.
+
 ## Comandos
 
 ```bash
