@@ -30,6 +30,7 @@
 	import EccsaIa from './pages/EccsaIa.svelte';
 	import Config from './pages/Config.svelte';
 	import Legends from './pages/Legends.svelte';
+	import Notas from './pages/Notas.svelte';
 	import TicketsOxxoGas from './pages/TicketsOxxoGas.svelte';
 	import Kilometros from './pages/Kilometros.svelte';
 	import KilometroVehiculo from './pages/KilometroVehiculo.svelte';
@@ -187,6 +188,8 @@
 				<TicketsOxxoGas />
 			{:else if $path.startsWith('/tickets_oxxogas/')}
 				<TicketOxxoGasDetalle id={$path.split('/')[2]} />
+			{:else if $path === '/notas'}
+				<Notas />
 		{:else}
 			<Dashboard />
 		{/if}

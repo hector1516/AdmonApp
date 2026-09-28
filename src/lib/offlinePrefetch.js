@@ -55,6 +55,8 @@ const MODULES = [
 		list: '/ia/conversaciones',
 		details: (l) => (l || []).slice(0, LIMIT).map((c) => `/ia/conversaciones/${c.Id}/mensajes`)
 	},
+	// 📝 Notas del equipo (lista del módulo y del panel del Dashboard)
+	{ list: '/notas' },
 	// ⚙️ Configuración (liviana)
 	{ list: '/dispositivo/ip' },
 	{ list: '/passkeys/mine' },
