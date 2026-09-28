@@ -32,6 +32,7 @@
 	import Legends from './pages/Legends.svelte';
 	import TicketsOxxoGas from './pages/TicketsOxxoGas.svelte';
 	import Kilometros from './pages/Kilometros.svelte';
+	import KilometroVehiculo from './pages/KilometroVehiculo.svelte';
 	import TicketOxxoGasDetalle from './pages/TicketOxxoGasDetalle.svelte';
 
 	let ready = $state(false);
@@ -179,6 +180,8 @@
 				<Legends />
 			{:else if $path === '/kilometros'}
 				<Kilometros />
+			{:else if $path.startsWith('/kilometros/vehiculo/')}
+				<KilometroVehiculo id={$path.split('/')[2]} />
 			{:else if $path === '/tickets_oxxogas'}
 				<TicketsOxxoGas />
 			{:else if $path.startsWith('/tickets_oxxogas/')}

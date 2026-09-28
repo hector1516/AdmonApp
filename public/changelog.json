@@ -1,13 +1,9 @@
 {
   "app": "admon",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "cambios": [
-    "🔔 Se fue el botón de notificaciones de la barra: ya no se usaba y en algunos casos estaba duplicado con la pestaña propia de cada app.",
-    "📋 Novedades: la primera vez que abras una versión nueva, esta ventanita te dice qué cambió. El botón 📋 la vuelve a abrir cuando quieras.",
-    "🏢 El banner ahora sí dice si estás en la oficina o en remoto (antes siempre mostraba 📍).",
-    "📦 La app funciona sin conexión: guarda los últimos 10 registros y los detalles de cada módulo.",
-    "🤖 Módulo de Remisiones con códigos SAT CFDI 4.0.",
-    "⛽ Tickets de OxxoGas: consulta de saldo, Go Vale y retiro de Telegram.",
-    "🚪 El botón de salir ya funciona desde cualquier página, no solo del inicio."
+    "🤖 ECCSA IA: ahora es una sola conversación continua con historial, y su botón está directo en el Dashboard.",
+    "🚗 En Kilómetros, tocar un vehículo abre su detalle en una página propia (antes en ventana emergente) y se puede compartir como enlace.",
+    "🕒 Los registros de kilometraje guardan siempre la hora de México (antes algunos salían 6 horas adelantados) y ya no dejan capturar fechas futuras."
   ]
 }

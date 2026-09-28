@@ -3,6 +3,33 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.2.0] - 2026-09-28
+
+### Nuevo
+- **ECCSA IA**: chat de una sola conversación (historial continuo en una
+  conversación, con Markdown en las respuestas) y acceso directo desde el
+  primer botón del Dashboard. `src/pages/EccsaIa.svelte`, `src/pages/Dashboard.svelte`.
+- **Kilómetros → detalle de vehículo como página propia**: al tocar un vehículo
+  se abre `/kilometros/vehiculo/:id` (deep-link, se puede compartir), en vez
+  del popup anterior. Nueva página `src/pages/KilometroVehiculo.svelte`,
+  ruta en `src/App.svelte`, tarjetas navegan en `src/pages/Kilometros.svelte`.
+
+### Corregido
+- **Hora de los registros de km**: el backend convierte fechas con offset (p. ej.
+  `...Z` de UTC) a hora de México antes de guardar —antes las guardaba crudas,
+  6 h adelantadas— y rechaza fechas futuras (`api/main.py`,
+  `kilometros_registro`). El formulario ya no depende de la zona horaria del
+  dispositivo: usa `Intl` con `America/Mexico_City` (`ahoraLocalInput` en
+  `Kilometros.svelte` / `KilometroVehiculo.svelte`) y el detalle renderiza la
+  fecha guardada sin convertirla (`fmtFecha`).
+- **Datos de producción**: 58 registros históricos de `HUB_RegistroKilometros`
+  que estaban +6 h se corrigieron con `DATEADD(hour,-6,...)` (respaldo en el
+  servidor); verificados contra bitácora y cola de Telegram: 59/59 a 0 h.
+- **Endpoint de ECCSA IA roto en producción**: `SELECT ApiKey, Modelo` contra
+  `HUB_AiConfig`, pero la columna se llama `Model` → cada mensaje devolvía
+  500. También se actualizó el modelo de respaldo a `gemini-3.5-flash-lite`
+  (`api/main.py`).
+
 ## [1.1.0] - 2026-09-27
 
 ### Nuevo

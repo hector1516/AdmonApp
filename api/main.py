@@ -2771,7 +2771,8 @@ async def ia_send_mensaje(id_conversacion: int, body: IaMensajeCreate, current_u
         conn.commit()
 
         # 2. Obtener config IA (api_key + model)
-        cursor.execute("SELECT ApiKey, Modelo FROM HUB_AiConfig WHERE Id = 1")
+        # OJO: la columna se llama `Model` (no `Modelo`) en HUB_AiConfig.
+        cursor.execute("SELECT ApiKey, Model FROM HUB_AiConfig WHERE Id = 1")
         ai_cfg_row = cursor.fetchone()
         if not ai_cfg_row or not ai_cfg_row[0]:
             # Guardar mensaje de error
@@ -2781,7 +2782,7 @@ async def ia_send_mensaje(id_conversacion: int, body: IaMensajeCreate, current_u
             conn.close()
             return await ia_get_mensajes(id_conversacion, current_user)
 
-        api_key, model_name = ai_cfg_row[0], ai_cfg_row[1] or 'gemini-1.5-flash'
+        api_key, model_name = ai_cfg_row[0], ai_cfg_row[1] or 'gemini-3.5-flash-lite'
 
         # 3. Obtener historial para contexto (últimos 8 turnos = 16 mensajes)
         cursor.execute("""
@@ -4711,16 +4712,30 @@ async def kilometros_registro(body: KilometroRegistroReq,
     if not body.fecha_hora:
         fecha = _ahora_mexico()
     else:
+        from datetime import timezone as _tz, timedelta as _td
         try:
             fecha = datetime.fromisoformat(str(body.fecha_hora).replace("Z", "+00:00"))
-            fecha = fecha.replace(tzinfo=None)
         except ValueError:
             raise HTTPException(status_code=400, detail="Fecha/hora inválida. Formato: YYYY-MM-DDTHH:MM")
+        if fecha.tzinfo is not None:
+            # Cliente que envía con offset (p. ej. "...Z" = UTC): convertir a
+            # hora de México (UTC−6). Antes se hacía .replace(tzinfo=None),
+            # que guardaba la hora UTC cruda y dejaba el registro 6 h adelantado.
+            fecha = fecha.astimezone(_tz(_td(hours=-6))).replace(tzinfo=None)
+        # Si viene sin offset (formato normal de la UI) ya ES hora de México:
+        # la UI la genera con Intl en America/Mexico_City, se guarda tal cual.
     # El día del registro se calcula en hora de México (no con la fecha del
     # servidor, que corre en UTC): un registro de "hoy" hecho a las 23:30 en CDMX
     # no debe contar como registro de mañana.
     from datetime import timedelta
     hoy_local = _ahora_mexico().date()
+    # Rechazar fechas futuras: un cliente con reloj mal (o en UTC) mandaría
+    # "ahora" adelantado, el registro se guardaría mal Y bloquearía el registro
+    # real del día por la regla de 1 por día. Tolerancia de 10 min.
+    if fecha > _ahora_mexico() + timedelta(minutes=10):
+        raise HTTPException(
+            status_code=400,
+            detail="La fecha y hora del registro no puede ser futura.")
 
     conn = get_connection()
     try:
