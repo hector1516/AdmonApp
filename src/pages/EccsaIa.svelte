@@ -276,7 +276,14 @@
 	.chat-page {
 		display: flex;
 		flex-direction: column;
-		height: 100vh;
+		/* Autoajuste a la pantalla COMPLETA: la página vive dentro de
+		   .shell-below-banner, que ya empuja el contenido var(--banner-h) hacia
+		   abajo por el banner fijo. Con height:100vh el total quedaba
+		   100vh + banner = más alto que la pantalla (se desbordaba en móvil).
+		   Se resta el banner y se usa dvh (viewport dinámico) para que la
+		   barra del navegador móvil no inflen la altura. */
+		height: calc(100vh - var(--banner-h));
+		height: calc(100dvh - var(--banner-h));
 		background: var(--color-background);
 	}
 

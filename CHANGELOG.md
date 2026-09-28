@@ -35,6 +35,11 @@
   404. Ahora el detalle abre correctamente (`src/App.svelte`).
 - Se quitó la leyenda "N requieren servicio (≥9,500 km) / Ninguno requiere
   servicio" de debajo del KPI "Con lectura esta semana" en Kilómetros.
+- **ECCSA IA se salía de la pantalla del teléfono**: `.chat-page` medía
+  `100vh` pero vive debajo del banner fijo (que ya resta `--banner-h`), así
+  que la página quedaba `100vh + banner`. Ahora usa
+  `calc(100dvh - var(--banner-h))` y llena exacto la pantalla visible
+  (`src/pages/EccsaIa.svelte`).
 
 ## [1.1.0] - 2026-09-27
 
