@@ -11,6 +11,7 @@
 	//  2) Captura: odómetro por automóvil con fecha y hora (1 registro por día).
 	// Los datos salen de HUB_RegistroKilometros, la MISMA tabla que escribe el
 	// HUB y Field: lo que se captura en cualquiera de las apps se ve aquí.
+	// Las tarjetas usan el mismo lenguaje visual que Tickets de OxxoGas.
 
 	let tab = $state('consumo');
 	let loading = $state(true);
@@ -19,7 +20,6 @@
 
 	// ── Consumo ───────────────────────────────────────────────────────────────
 	let consumo = $state(null);
-	let semanaOffset = $state(0); // 0 = semana en curso, -1 = anterior, ...
 	let vehiculos = $state([]);
 	let recientes = $state([]);
 
@@ -63,11 +63,13 @@
 
 	let vehiculoSel = $derived(vehiculos.find((v) => String(v.id) === String(selVehiculo)) || null);
 
-	async function cargarConsumo() {
-		const d = consumo;
-		let url = '/kilometros/consumo';
-		if (d && d.semana) url += `?anio=${d.semana.anio}&semana=${d.semana.num}`;
-		consumo = await api.get(url);
+	// Semana ISO de una fecha (algoritmo estándar: el jueves define el año).
+	function isoWeekOf(date) {
+		const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+		const dia = d.getUTCDay() || 7;
+		d.setUTCDate(d.getUTCDate() + 4 - dia);
+		const inicioAnio = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+		return { anio: d.getUTCFullYear(), semana: Math.ceil(((d - inicioAnio) / 86400000 + 1) / 7) };
 	}
 
 	async function cargarTodo() {
@@ -89,23 +91,20 @@
 		}
 	}
 
-	// Semana ISO de una fecha (algoritmo estándar: jueves de la semana define el año).
-	function isoWeekOf(date) {
-		const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-		const dia = d.getUTCDay() || 7;
-		d.setUTCDate(d.getUTCDate() + 4 - dia);
-		const inicioAnio = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-		return { anio: d.getUTCFullYear(), semana: Math.ceil(((d - inicioAnio) / 86400000 + 1) / 7) };
-	}
-
-	// Cambiar de semana: se pide la anterior a la que ya está cargada.
+	// Mover el rango de la semana. OJO: `semana.inicio` YA viene en ISO
+	// ("2026-09-28T00:00:00"); concatenarle otro 'T00:00:00' producía una fecha
+	// inválida y la petición salía como ?anio=NaN&semana=NaN (422).
 	async function moverSemana(delta) {
 		busy = true;
 		error = '';
 		try {
 			const s = consumo?.semana;
 			if (!s) return;
-			const d = new Date(s.inicio + 'T00:00:00');
+			const d = new Date(s.inicio);
+			if (isNaN(d.getTime())) {
+				error = 'No se pudo leer la semana actual.';
+				return;
+			}
 			d.setDate(d.getDate() + delta * 7);
 			const { anio, semana } = isoWeekOf(d);
 			consumo = await api.get(`/kilometros/consumo?anio=${anio}&semana=${semana}`);
@@ -117,8 +116,11 @@
 	}
 
 	function volverACurrent() {
-		consumo = null;
-		api.get('/kilometros/consumo').then((c) => (consumo = c)).catch((e) => (error = e.message));
+		busy = true;
+		api.get('/kilometros/consumo')
+			.then((c) => (consumo = c))
+			.catch((e) => (error = e.message))
+			.finally(() => (busy = false));
 	}
 
 	function alElegirVehiculo() {
@@ -133,7 +135,8 @@
 			error = 'Elige un automóvil.';
 			return;
 		}
-		if (km === null || km === undefined || km === '' || isNaN(Number(km))) {
+		const valor = Number(km);
+		if (km === null || km === undefined || km === '' || !Number.isFinite(valor)) {
 			error = 'Escribe los kilómetros del odómetro.';
 			return;
 		}
@@ -141,12 +144,10 @@
 		try {
 			const r = await api.post('/kilometros/registro', {
 				id_automovil: Number(selVehiculo),
-				kilometros: Number(km),
+				kilometros: valor,
 				fecha_hora: fechaHora || ahoraLocalInput()
 			});
 			msg = `✅ Kilometraje registrado: ${fmtNum(r.kilometros)} km — ${r.vehiculo}`;
-			// Recargar todo para reflejar el consumo de la semana de inmediato.
-			consumo = null;
 			await cargarTodo();
 		} catch (e) {
 			error = e.message || 'No se pudo registrar.';
@@ -173,6 +174,8 @@
 	<div class="header">
 		<button class="btn btn-sm btn-secondary" onclick={() => navigate('/dashboard')} title="Volver">⬅️</button>
 		<h1>🛣️ Kilómetros</h1>
+		<div style="flex:1"></div>
+		<span class="count">{consumo ? consumo.vehiculos.length : 0} vehículos</span>
 	</div>
 
 	<OfflineNotice />
@@ -203,11 +206,11 @@
 				<button class="btn btn-sm btn-ghost" onclick={volverACurrent} disabled={busy}>Esta semana</button>
 			</div>
 
-			<div class="cards">
-				<div class="card-kpi">
+			<div class="kpis">
+				<div class="kpi">
 					<div class="kpi-lbl">Consumo de la flota</div>
 					<div class="kpi-val">{fmtNum(r.consumo_km)} <span class="kpi-unit">km</span></div>
-					<div class="kpi-sub" class:sube={r.consumo_km > r.consumo_ant} class:baja={r.consumo_km < r.consumo_ant}>
+					<div class="kpi-sub" class:subio={r.consumo_km > r.consumo_ant} class:bajo={r.consumo_km < r.consumo_ant}>
 						{#if r.consumo_ant > 0}
 							{r.consumo_km >= r.consumo_ant ? '▲' : '▼'} {fmtNum(Math.abs(r.consumo_km - r.consumo_ant))} km vs. semana anterior
 						{:else}
@@ -215,13 +218,13 @@
 						{/if}
 					</div>
 				</div>
-				<div class="card-kpi">
+				<div class="kpi">
 					<div class="kpi-lbl">Vales consumidos</div>
 					<div class="kpi-val">{fmtNum(r.vales)}</div>
 					<div class="kpi-sub">{fmtMXN(r.monto_vales)} · {fmtMXN(consumo.monto_vale)} c/u</div>
 				</div>
-				<div class="card-kpi">
-					<div class="kpi-lbl">Automóviles con lectura</div>
+				<div class="kpi">
+					<div class="kpi-lbl">Con lectura esta semana</div>
 					<div class="kpi-val">{r.con_registro}<span class="kpi-unit">/{r.vehiculos}</span></div>
 					<div class="kpi-sub">{r.requieren_servicio > 0 ? `⚠️ ${r.requieren_servicio} requieren servicio (≥9,500 km)` : '✅ Ninguno requiere servicio'}</div>
 				</div>
@@ -229,69 +232,78 @@
 
 			<p class="hint">
 				Consumo = último registro de la semana − primero. Con una sola lectura no hay diferencia
-				posible, por eso se marca “1 lectura”. Vales = tickets de gasolina capturados en Field
+				posible, por eso la tarjeta marca “1 lectura”. Vales = tickets de gasolina capturados en Field
 				(x {fmtMXN(consumo.monto_vale)} cada uno).
 			</p>
 
-			<div class="table-wrap">
-				<table>
-					<thead>
-						<tr>
-							<th>Placas</th><th>Automóvil</th><th>Conductor</th>
-							<th class="num">Lecturas</th><th class="num">Primero</th><th class="num">Último</th>
-							<th class="num">Consumo</th><th class="num">Vales</th><th class="num">Monto</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each consumo.vehiculos as v (v.id)}
-							{@const delta = v.consumo_km - v.consumo_ant}
-							<tr class:sin-lectura={v.registros === 0}>
-								<td class="mono">{v.placas || '—'}</td>
-								<td>{v.marca_modelo || '—'}</td>
-								<td class="muted">{v.conductor || '—'}</td>
-								<td class="num">
-									{#if v.registros === 0}<span class="pill warn">sin lectura</span>
-									{:else if v.registros === 1}<span class="pill">1 lectura</span>
-									{:else}{v.registros}{/if}
-								</td>
-								<td class="num mono">{v.primer_km === null ? '—' : fmtNum(v.primer_km)}</td>
-								<td class="num mono">{v.ultimo_km === null ? '—' : fmtNum(v.ultimo_km)}</td>
-								<td class="num">
-									{#if v.registros >= 2}
-										<strong>{fmtNum(v.consumo_km)}</strong>
-										{#if v.consumo_ant > 0}
-											<span class="delta" class:subio={delta > 0} class:bajo={delta < 0}>
-												{delta > 0 ? '▲' : delta < 0 ? '▼' : '='}{Math.abs(delta) ? fmtNum(Math.abs(delta)) : ''}
-											</span>
-										{/if}
-									{:else}—{/if}
-								</td>
-								<td class="num">{v.vales ? v.vales : '—'}</td>
-								<td class="num">{v.vales ? fmtMXN(v.monto_vales) : '—'}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		{/if}
+			<!-- Tarjetas por automóvil (mismo estilo que Tickets de OxxoGas) -->
+			<div class="grid">
+				{#each consumo.vehiculos as v (v.id)}
+					{@const delta = v.consumo_km - v.consumo_ant}
+					<div class="card-auto" class:sin-lectura={v.registros === 0}>
+						<div class="body">
+							<div class="folio">{v.placas || 'SIN PLACAS'}</div>
+							<div class="fecha">{v.marca_modelo || '—'}</div>
 
-		{#if recientes.length}
-			<h2 class="sub">🕐 Últimas capturas</h2>
-			<div class="table-wrap">
-				<table>
-					<thead><tr><th>Fecha y hora</th><th>Automóvil</th><th>Conductor</th><th class="num">Kilómetros</th></tr></thead>
-					<tbody>
-						{#each recientes as k (k.id)}
-							<tr>
-								<td class="mono">{fmtFecha(k.fecha_hora)}</td>
-								<td>{k.marca_modelo} <span class="muted mono">{k.placas}</span></td>
-								<td class="muted">{k.usuario || '—'}</td>
-								<td class="num mono">{fmtNum(k.kilometros)}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+							<div class="consumo">
+								{#if v.registros >= 2}
+									<span class="consumo-num">{fmtNum(v.consumo_km)}</span><span class="consumo-unit">km</span>
+								{:else}
+									<span class="consumo-num apagado">—</span><span class="consumo-unit">sin diferencia</span>
+								{/if}
+							</div>
+
+							<div class="chips">
+								{#if v.registros === 0}
+									<span class="chip pend">Sin lectura</span>
+								{:else if v.registros === 1}
+									<span class="chip pend">1 lectura</span>
+								{:else}
+									<span class="chip ok">{v.registros} lecturas</span>
+									{#if v.consumo_ant > 0}
+										<span class="chip" class:subio={delta > 0} class:bajo={delta < 0}>
+											{delta > 0 ? '▲' : delta < 0 ? '▼' : '='} {fmtNum(Math.abs(delta))} vs. ant.
+										</span>
+									{/if}
+								{/if}
+								{#if v.vales > 0}
+									<span class="chip vale">⛽ {v.vales} {v.vales === 1 ? 'vale' : 'vales'} · {fmtMXN(v.monto_vales)}</span>
+								{/if}
+								{#if v.requiere_servicio}
+									<span class="chip warn">🔧 Requiere servicio</span>
+								{/if}
+							</div>
+
+							{#if v.conductor}<div class="row">👤 {v.conductor}</div>{/if}
+							<div class="row">🛞 Odómetro: {fmtNum(v.km_actuales)} km</div>
+							{#if v.registros >= 2}
+								<div class="row">↔️ {fmtNum(v.primer_km)} → {fmtNum(v.ultimo_km)}</div>
+							{/if}
+							{#if v.kms_desde_servicio !== null}
+								<div class="row">🔧 {fmtNum(v.kms_desde_servicio)} km desde el último servicio</div>
+							{/if}
+						</div>
+					</div>
+				{/each}
 			</div>
+
+			{#if recientes.length}
+				<h2 class="sub">🕐 Últimas capturas</h2>
+				<div class="grid grid-chicas">
+					{#each recientes as k (k.id)}
+						<div class="card-auto">
+							<div class="body">
+								<div class="folio pequeno">{fmtNum(k.kilometros)} <span class="consumo-unit">km</span></div>
+								<div class="fecha">{k.marca_modelo} · {k.placas}</div>
+								<div class="chips">
+									<span class="chip">{fmtFecha(k.fecha_hora)}</span>
+									{#if k.usuario}<span class="chip">{k.usuario}</span>{/if}
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		{/if}
 	{:else}
 		<!-- ═══ CAPTURA ═══ -->
@@ -311,7 +323,6 @@
 						Última lectura: <strong>{fmtNum(vehiculoSel.km_actuales)} km</strong>
 						{vehiculoSel.ultima_lectura ? `(${fmtFecha(vehiculoSel.ultima_lectura)})` : '(sin registros)'} ·
 						mínimo {fmtNum(vehiculoSel.km_actuales)} km
-						{#if vehiculoSel.requiere_servicio}<span class="pill warn" style="margin-left: 0.4rem;">requiere servicio</span>{/if}
 					</p>
 				{/if}
 			</div>
@@ -340,7 +351,7 @@
 	.page { max-width: 1200px; margin: 0 auto; padding: 1rem; }
 	.header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
 	.header h1 { font-size: 1.25rem; margin: 0; color: #f1f5f9; }
-
+	.count { font-size: 0.8rem; color: #94a3b8; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 0.25rem 0.7rem; }
 	.tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--color-border); margin-bottom: 1rem; }
 	.tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--color-text-muted);
 		padding: 0.6rem 0.9rem; font: inherit; cursor: pointer; font-weight: 600; }
@@ -352,12 +363,11 @@
 	.msg.ok { background: rgba(34, 197, 94, 0.1); color: #4ade80; }
 	.state { text-align: center; color: #94a3b8; padding: 3rem 1rem; font-size: 0.9rem; }
 	.hint { font-size: 0.75rem; color: #64748b; margin: 0 0 0.9rem; }
-	.muted { color: var(--color-text-muted); }
-	.mono { font-family: ui-monospace, 'Cascadia Mono', monospace; }
-	.sub { font-size: 0.95rem; color: #f1f5f9; margin: 1.2rem 0 0.5rem; }
+	.hint strong { color: #FFAE00; }
+	.sub { font-size: 0.95rem; color: #f1f5f9; margin: 1.4rem 0 0.6rem; }
 
 	/* Barra de semana */
-	.semana-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; }
+	.semana-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; flex-wrap: wrap; }
 	.semana-txt { text-align: center; min-width: 190px; }
 	.semana-lbl { font-weight: 700; color: #f1f5f9; font-size: 0.9rem; }
 	.semana-rango { font-size: 0.75rem; color: var(--color-text-muted); }
@@ -365,30 +375,42 @@
 	.btn-ghost:hover { color: #f1f5f9; }
 
 	/* KPIs */
-	.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-	.card-kpi { background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px; padding: 0.85rem 1rem; }
+	.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+	.kpi { background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px; padding: 0.85rem 1rem; }
 	.kpi-lbl { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; font-weight: 700; }
 	.kpi-val { font-size: 1.7rem; font-weight: 800; color: #f1f5f9; line-height: 1.2; }
 	.kpi-unit { font-size: 0.9rem; color: #94a3b8; font-weight: 600; }
 	.kpi-sub { font-size: 0.72rem; color: var(--color-text-muted); }
-	.kpi-sub.sube { color: #fbbf24; }
-	.kpi-sub.baja { color: #4ade80; }
+	.kpi-sub.subio { color: #fbbf24; }
+	.kpi-sub.bajo { color: #4ade80; }
 
-	/* Tabla */
-	.table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: 12px; }
-	table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-	th, td { padding: 0.5rem 0.6rem; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
-	th { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; background: rgba(255, 255, 255, 0.03); }
-	td.num, th.num { text-align: right; }
-	tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
-	tr.sin-lectura td { opacity: 0.55; }
-	.pill { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 999px;
-		background: rgba(148, 163, 184, 0.15); color: #cbd5e1; }
-	.pill.warn { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
-	.delta { font-size: 0.68rem; margin-left: 0.35rem; color: #94a3b8; }
-	.delta.subio { color: #fbbf24; }
-	.delta.bajo { color: #4ade80; }
+	/* Tarjetas (mismo estilo visual que Tickets de OxxoGas) */
+	.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 0.9rem; }
+	.grid-chicas { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+	.card-auto { text-align: left; background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px;
+		overflow: hidden; padding: 0; color: inherit; font: inherit; transition: transform 0.15s, border-color 0.15s; }
+	.card-auto:hover { transform: translateY(-3px); border-color: rgba(255, 107, 0, 0.5); }
+	.card-auto.sin-lectura { opacity: 0.72; }
+	.body { padding: 0.75rem 0.85rem 0.9rem; }
+	.folio { font-family: ui-monospace, 'Cascadia Mono', monospace; font-weight: 800; font-size: 1.05rem; color: #FFAE00; letter-spacing: 0.5px; }
+	.folio.pequeno { font-size: 0.95rem; }
+	.fecha { font-size: 0.72rem; color: #94a3b8; margin-top: 0.15rem; }
+	.consumo { margin-top: 0.5rem; display: flex; align-items: baseline; gap: 0.3rem; }
+	.consumo-num { font-size: 1.7rem; font-weight: 800; color: #f1f5f9; line-height: 1.1; }
+	.consumo-num.apagado { color: #64748b; }
+	.consumo-unit { font-size: 0.72rem; color: #94a3b8; font-weight: 600; }
+	.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.55rem; }
+	.chip { font-size: 0.68rem; font-weight: 700; border-radius: 999px; padding: 0.22rem 0.6rem; border: 1px solid transparent;
+		background: rgba(255, 255, 255, 0.06); color: #cbd5e1; }
+	.chip.ok { color: #4ade80; background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.25); }
+	.chip.pend { color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.3); }
+	.chip.vale { color: #93c5fd; background: rgba(147, 197, 253, 0.1); border-color: rgba(147, 197, 253, 0.25); }
+	.chip.warn { color: #fca5a5; background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.3); }
+	.chip.subio { color: #fbbf24; background: rgba(251, 191, 36, 0.1); }
+	.chip.bajo { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+	.row { font-size: 0.75rem; color: #cbd5e1; margin-top: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+	/* Captura */
 	.card { background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px; padding: 1rem; }
 	.card-title { font-weight: 700; color: #f1f5f9; margin-bottom: 0.75rem; }
 	.field { margin-bottom: 0.75rem; }

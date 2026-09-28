@@ -4441,16 +4441,23 @@ async def kilometros_vehiculos(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/kilometros/consumo")
-async def kilometros_consumo(anio: int = 0, semana: int = 0,
+async def kilometros_consumo(anio: str = "", semana: str = "",
                              current_user: dict = Depends(get_current_user)):
     """Consumo de la flota en una semana: km del último registro menos el
     primero, más los vales consumidos (tickets de Field) y su monto (× $500).
 
     Consumo = último − primer registro de la SEMANA (orden cronológico). Con un
     solo registro no hay diferencia posible: se reporta 0 y `registros == 1` para
-    que la UI lo diga en vez de inventar un consumo."""
+    que la UI lo diga en vez de inventar un consumo.
+
+    anio/semana se reciben como texto a propósito: si el front manda algo no
+    numérico (NaN, vacío), se cae a la semana en curso en vez de responder 422."""
     _require_registro_kilometros(current_user)
-    ini, fin, lunes = _rango_semana(anio or None, semana or None)
+    try:
+        anio_i, semana_i = int(anio or 0), int(semana or 0)
+    except (TypeError, ValueError):
+        anio_i, semana_i = 0, 0
+    ini, fin, lunes = _rango_semana(anio_i or None, semana_i or None)
     # Semana anterior, para que la UI pueda mostrar la variación.
     from datetime import timedelta
     ini_ant, fin_ant = ini - timedelta(days=7), fin - timedelta(days=7)
