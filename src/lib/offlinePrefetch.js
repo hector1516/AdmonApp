@@ -45,6 +45,11 @@ const MODULES = [
 	// para que la tarjeta muestre el último saldo conocido sin red y se
 	// refresque al volver la conexión (mismo ciclo que el resto de módulos).
 	{ list: '/tickets-oxxogas/saldo' },
+	// 🛣️ Kilómetros: consumo semanal (KPIs + tabla por vehículo) y la flota para
+	// el selector de captura. La captura (POST) no se cachea: requiere conexión.
+	{ list: '/kilometros/consumo' },
+	{ list: '/kilometros/vehiculos' },
+	{ list: '/kilometros/recientes?n=15' },
 	// 🤖 ECCSA IA: conversaciones (máx 10 por usuario) + sus mensajes
 	{
 		list: '/ia/conversaciones',

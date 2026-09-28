@@ -123,7 +123,7 @@ def _user_from_token(token: str):
         email = parts[0]
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, AccesoValesOxxoGas FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, AccesoValesOxxoGas, AccesoRegistroKilometros FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -144,6 +144,8 @@ def _user_from_token(token: str):
                 "acceso_registro_reportes": row[12] == 1,
                 "acceso_ia": row[13] == 1,
                 "acceso_vales_oxxogas": row[15] == 1 if len(row) > 15 else False,
+                # Módulo Kilómetros (consumo semanal + captura). row[16] = AccesoRegistroKilometros
+                "acceso_registro_kilometros": row[16] == 1 if len(row) > 16 else False,
             }
         return None
     except Exception as e:
@@ -234,7 +236,7 @@ def _build_login_response(email: str, row) -> dict:
     # row: Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas,
     #      AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo,
     #      AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes,
-    #      AccesoIA, Nickname, AccesoValesOxxoGas
+    #      AccesoIA, Nickname, AccesoValesOxxoGas, AccesoRegistroKilometros
     b = lambda i: (row[i] == 1) if len(row) > i and row[i] is not None else False
     user = {
         "id": row[0], "nombre": row[1], "email": row[2],
@@ -247,6 +249,8 @@ def _build_login_response(email: str, row) -> dict:
         "acceso_reportes": b(13), "acceso_registro_reportes": b(14),
         "acceso_ia": b(15),
         "acceso_vales_oxxogas": b(17),
+        # Módulo Kilómetros (consumo semanal + captura)
+        "acceso_registro_kilometros": b(18),
         # Para la pantalla de sugerencia de passkey (label = nickname si existe)
         "nickname": (row[16] or "").strip() if len(row) > 16 and row[16] else "",
     }
@@ -262,7 +266,7 @@ async def api_login(body: LoginRequest):
             raise HTTPException(status_code=400, detail="Email domain not authorized")
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, AccesoValesOxxoGas FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
+        cursor.execute("SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, AccesoValesOxxoGas, AccesoRegistroKilometros FROM HUB_Users WHERE LTRIM(RTRIM(Email)) = %s", (body.email.strip().lower(),))
         row = cursor.fetchone()
         conn.close()
         if row and row[4] and row[3] == body.password:
@@ -3188,7 +3192,7 @@ def _login_row_by_id(user_id: int):
         "SELECT Id, Nombre, Email, Password, Activo, AccesoInventario, AccesoNominas, "
         "AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, "
         "AccesoUsuarios, AccesoReportes, AccesoRegistroReportes, AccesoIA, Nickname, "
-        "AccesoValesOxxoGas "
+        "AccesoValesOxxoGas, AccesoRegistroKilometros "
         "FROM HUB_Users WHERE Id = %s",
         (user_id,),
     )
@@ -4333,6 +4337,326 @@ async def tickets_oxxogas_imagen(ticket_id: int, w: int = 0,
         conn.close()
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Módulo Kilómetros — consumo semanal de la flota + captura de odómetro
+# ═══════════════════════════════════════════════════════════════════════════
+# Tabla de datos: HUB_RegistroKilometros (Id, IdAutomovil, Kilometros,
+# FechaHora, IdUsuario) — la misma que escribe el HUB, así que lo capturado en
+# cualquiera de las dos apps se ve en las otras. Reglas heredadas del HUB:
+#   · 1 registro por automóvil por día (dedup por CAST(FechaHora AS DATE))
+#   · el odómetro no puede bajar del último valor registrado
+# Los "vales" se cuentan con HUB_OxxoGasTickets (tickets de gasolina capturados
+# en Field: traen IdVehiculo SIEMPRE, a diferencia de HUB_OxxoGasVales que llega
+# de GoVale sin IdVehiculo y no se puede atribuir a un automóvil).
+MONTO_VALE = 500.0  # monto fijo de cada vale (mismo criterio que el HUB)
+
+
+def _require_registro_kilometros(current_user: dict):
+    """Gate del módulo: permiso 'Registro Kilómetros' (AccesoRegistroKilometros)."""
+    if not current_user.get("acceso_registro_kilometros"):
+        raise HTTPException(status_code=403, detail="No access")
+
+
+def _ahora_mexico():
+    """Fecha/hora de México. Sin horario de verano desde 2022, así que UTC-6 fijo."""
+    from datetime import timedelta
+    return datetime.utcnow() - timedelta(hours=6)
+
+
+def _rango_semana(anio=None, semana=None):
+    """(inicio, fin_exclusivo) de una semana ISO: lunes 00:00 -> lunes 00:00.
+
+    Sin argumentos devuelve la semana en curso. Los límites se calculan en hora
+    de México para que coincidan con los registros que captura el HUB.
+    """
+    from datetime import date, timedelta
+    hoy = _ahora_mexico().date()
+    try:
+        if anio and semana:
+            lunes = date.fromisocalendar(int(anio), int(semana), 1)
+        else:
+            lunes = hoy - timedelta(days=hoy.weekday())
+    except (ValueError, TypeError):
+        lunes = hoy - timedelta(days=hoy.weekday())
+    return (
+        datetime(lunes.year, lunes.month, lunes.day),
+        datetime(lunes.year, lunes.month, lunes.day) + timedelta(days=7),
+        lunes,
+    )
+
+
+class KilometroRegistroReq(BaseModel):
+    id_automovil: int
+    kilometros: int
+    fecha_hora: str = ""  # ISO; vacío = ahora (hora de México)
+
+
+@app.get("/api/kilometros/vehiculos")
+async def kilometros_vehiculos(current_user: dict = Depends(get_current_user)):
+    """Flota completa con el último odómetro leído, para el selector de captura."""
+    _require_registro_kilometros(current_user)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT a.Id, a.MarcaModelo, a.Placas, a.PolizaSeguro, a.UltimoServicioKms,
+                   u.Nombre AS Conductor,
+                   ISNULL((SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k
+                           WHERE k.IdAutomovil = a.Id ORDER BY k.FechaHora DESC, k.Id DESC), 0)
+                       AS KilometrosActuales,
+                   (SELECT MAX(k.FechaHora) FROM HUB_RegistroKilometros k
+                    WHERE k.IdAutomovil = a.Id) AS UltimaLectura,
+                   (SELECT COUNT(*) FROM HUB_RegistroKilometros k
+                    WHERE k.IdAutomovil = a.Id) AS TotalRegistros
+            FROM HUB_Automoviles a
+            LEFT JOIN HUB_Users u ON a.IdUsuarioAsignado = u.Id
+            ORDER BY a.MarcaModelo ASC
+        """)
+        out = []
+        for r in cursor.fetchall():
+            km_act = int(r["KilometrosActuales"] or 0)
+            ult_serv = r["UltimoServicioKms"]
+            desde = (km_act - int(ult_serv)) if ult_serv is not None else None
+            out.append({
+                "id": r["Id"],
+                "marca_modelo": r["MarcaModelo"],
+                "placas": r["Placas"],
+                "poliza": r["PolizaSeguro"] or "",
+                "conductor": r["Conductor"] or "",
+                "km_actuales": km_act,
+                "ultima_lectura": r["UltimaLectura"].isoformat() if r["UltimaLectura"] else None,
+                "total_registros": int(r["TotalRegistros"] or 0),
+                "kms_desde_servicio": desde,
+                # Mismo umbral que el HUB (views/administrador_usuarios / get_automoviles)
+                "requiere_servicio": bool(desde is not None and desde >= 9500),
+            })
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.get("/api/kilometros/consumo")
+async def kilometros_consumo(anio: int = 0, semana: int = 0,
+                             current_user: dict = Depends(get_current_user)):
+    """Consumo de la flota en una semana: km del último registro menos el
+    primero, más los vales consumidos (tickets de Field) y su monto (× $500).
+
+    Consumo = último − primer registro de la SEMANA (orden cronológico). Con un
+    solo registro no hay diferencia posible: se reporta 0 y `registros == 1` para
+    que la UI lo diga en vez de inventar un consumo."""
+    _require_registro_kilometros(current_user)
+    ini, fin, lunes = _rango_semana(anio or None, semana or None)
+    # Semana anterior, para que la UI pueda mostrar la variación.
+    from datetime import timedelta
+    ini_ant, fin_ant = ini - timedelta(days=7), fin - timedelta(days=7)
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT a.Id, a.MarcaModelo, a.Placas, u.Nombre AS Conductor,
+                   (SELECT COUNT(*) FROM HUB_RegistroKilometros k
+                     WHERE k.IdAutomovil = a.Id AND k.FechaHora >= %(ini)s AND k.FechaHora < %(fin)s)
+                       AS Registros,
+                   ISNULL((SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k
+                            WHERE k.IdAutomovil = a.Id AND k.FechaHora >= %(ini)s AND k.FechaHora < %(fin)s
+                            ORDER BY k.FechaHora ASC, k.Id ASC), 0) AS PrimerKm,
+                   ISNULL((SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k
+                            WHERE k.IdAutomovil = a.Id AND k.FechaHora >= %(ini)s AND k.FechaHora < %(fin)s
+                            ORDER BY k.FechaHora DESC, k.Id DESC), 0) AS UltimoKm,
+                   ISNULL((SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k
+                            WHERE k.IdAutomovil = a.Id AND k.FechaHora >= %(ini_ant)s AND k.FechaHora < %(fin_ant)s
+                            ORDER BY k.FechaHora DESC, k.Id DESC), 0)
+                       - ISNULL((SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k
+                            WHERE k.IdAutomovil = a.Id AND k.FechaHora >= %(ini_ant)s AND k.FechaHora < %(fin_ant)s
+                            ORDER BY k.FechaHora ASC, k.Id ASC), 0) AS ConsumoAnt,
+                   (SELECT COUNT(*) FROM HUB_OxxoGasTickets t
+                     WHERE t.IdVehiculo = a.Id AND t.FechaRegistro >= %(ini)s AND t.FechaRegistro < %(fin)s)
+                       AS Vales,
+                   ISNULL((SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k
+                            WHERE k.IdAutomovil = a.Id ORDER BY k.FechaHora DESC, k.Id DESC), 0) AS KmActuales,
+                   (SELECT MAX(k.FechaHora) FROM HUB_RegistroKilometros k
+                    WHERE k.IdAutomovil = a.Id) AS UltimaLectura,
+                   a.UltimoServicioKms
+            FROM HUB_Automoviles a
+            LEFT JOIN HUB_Users u ON a.IdUsuarioAsignado = u.Id
+        """, {"ini": ini, "fin": fin, "ini_ant": ini_ant, "fin_ant": fin_ant})
+        filas = cursor.fetchall()
+
+        vehiculos = []
+        for r in filas:
+            registros = int(r["Registros"] or 0)
+            primer, ultimo = int(r["PrimerKm"] or 0), int(r["UltimoKm"] or 0)
+            consumo = (ultimo - primer) if registros >= 2 else 0
+            vales = int(r["Vales"] or 0)
+            km_act = int(r["KmActuales"] or 0)
+            ult_serv = r["UltimoServicioKms"]
+            desde = (km_act - int(ult_serv)) if ult_serv is not None else None
+            vehiculos.append({
+                "id": r["Id"],
+                "marca_modelo": r["MarcaModelo"],
+                "placas": r["Placas"],
+                "conductor": r["Conductor"] or "",
+                "registros": registros,
+                "primer_km": primer if registros else None,
+                "ultimo_km": ultimo if registros else None,
+                "consumo_km": max(consumo, 0),
+                "consumo_ant": max(int(r["ConsumoAnt"] or 0), 0),
+                "vales": vales,
+                "monto_vales": round(vales * MONTO_VALE, 2),
+                "km_actuales": km_act,
+                "ultima_lectura": r["UltimaLectura"].isoformat() if r["UltimaLectura"] else None,
+                "kms_desde_servicio": desde,
+                "requiere_servicio": bool(desde is not None and desde >= 9500),
+            })
+        # Mayor consumo primero; sin registro al final.
+        vehiculos.sort(key=lambda v: (-v["consumo_km"], v["marca_modelo"] or ""))
+
+        iso = lunes.isocalendar()
+        domingo = fin - timedelta(days=1)
+        return {
+            "semana": {
+                "anio": iso[0], "num": iso[1],
+                "inicio": ini.isoformat(), "fin": fin.isoformat(),
+                "etiqueta": f"{lunes.strftime('%d/%m/%Y')} - {domingo.strftime('%d/%m/%Y')}",
+            },
+            "monto_vale": MONTO_VALE,
+            "resumen": {
+                "vehiculos": len(vehiculos),
+                "con_registro": sum(1 for v in vehiculos if v["registros"] > 0),
+                "consumo_km": sum(v["consumo_km"] for v in vehiculos),
+                "consumo_ant": sum(v["consumo_ant"] for v in vehiculos),
+                "vales": sum(v["vales"] for v in vehiculos),
+                "monto_vales": round(sum(v["vales"] for v in vehiculos) * MONTO_VALE, 2),
+                "requieren_servicio": sum(1 for v in vehiculos if v["requiere_servicio"]),
+            },
+            "vehiculos": vehiculos,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.get("/api/kilometros/recientes")
+async def kilometros_recientes(n: int = 15, current_user: dict = Depends(get_current_user)):
+    """Últimas capturas de odómetro (de Field o del HUB: es la misma tabla)."""
+    _require_registro_kilometros(current_user)
+    try:
+        n = max(1, min(int(n or 15), 100))
+    except (TypeError, ValueError):
+        n = 15
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("""
+            SELECT TOP (%(n)s) k.Id, k.IdAutomovil, k.Kilometros, k.FechaHora, k.IdUsuario,
+                   a.MarcaModelo, a.Placas, u.Nombre AS Usuario
+            FROM HUB_RegistroKilometros k
+            JOIN HUB_Automoviles a ON a.Id = k.IdAutomovil
+            LEFT JOIN HUB_Users u ON u.Id = k.IdUsuario
+            ORDER BY k.FechaHora DESC, k.Id DESC
+        """, {"n": n})
+        return [{
+            "id": r["Id"],
+            "id_automovil": r["IdAutomovil"],
+            "kilometros": r["Kilometros"],
+            "fecha_hora": r["FechaHora"].isoformat() if r["FechaHora"] else None,
+            "marca_modelo": r["MarcaModelo"],
+            "placas": r["Placas"],
+            "usuario": r["Usuario"] or "",
+        } for r in cursor.fetchall()]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
+
+
+@app.post("/api/kilometros/registro")
+async def kilometros_registro(body: KilometroRegistroReq,
+                              current_user: dict = Depends(get_current_user)):
+    """Captura de odómetro. Mismas reglas que el HUB (views/kilometros.py):
+    un registro por automóvil por día y el odómetro nunca puede bajar."""
+    _require_registro_kilometros(current_user)
+    id_auto = int(body.id_automovil)
+    km = int(body.kilometros)
+    if km < 0:
+        raise HTTPException(status_code=400, detail="Los kilómetros no pueden ser negativos.")
+    if not body.fecha_hora:
+        fecha = _ahora_mexico()
+    else:
+        try:
+            fecha = datetime.fromisoformat(str(body.fecha_hora).replace("Z", "+00:00"))
+            fecha = fecha.replace(tzinfo=None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Fecha/hora inválida. Formato: YYYY-MM-DDTHH:MM")
+    # El día del registro se calcula en hora de México (no con la fecha del
+    # servidor, que corre en UTC): un registro de "hoy" hecho a las 23:30 en CDMX
+    # no debe contar como registro de mañana.
+    from datetime import timedelta
+    hoy_local = _ahora_mexico().date()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT Id, MarcaModelo, Placas FROM HUB_Automoviles WHERE Id = %s", (id_auto,))
+        auto = cursor.fetchone()
+        if not auto:
+            raise HTTPException(status_code=404, detail="El automóvil no existe.")
+
+        cursor.execute(
+            "SELECT TOP 1 k.Kilometros FROM HUB_RegistroKilometros k "
+            "WHERE k.IdAutomovil = %s ORDER BY k.FechaHora DESC, k.Id DESC", (id_auto,))
+        row = cursor.fetchone()
+        km_previo = int(row["Kilometros"]) if row and row["Kilometros"] is not None else None
+        if km_previo is not None and km < km_previo:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Los kilómetros reportados ({km:,}) no pueden ser menores al "
+                        f"último registro ({km_previo:,} km)."))
+
+        # 1 registro por auto por día (misma regla del HUB: cualquier app que
+        # capture, el duplicado se detecta aquí).
+        cursor.execute(
+            "SELECT COUNT(*) AS n FROM HUB_RegistroKilometros "
+            "WHERE IdAutomovil = %s AND CAST(FechaHora AS DATE) = %s",
+            (id_auto, hoy_local))
+        if int(cursor.fetchone()["n"] or 0) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=("Este automóvil ya tiene un registro de kilometraje de hoy. "
+                        "Solo se permite un registro por día."))
+
+        cursor.execute(
+            "INSERT INTO HUB_RegistroKilometros (IdAutomovil, Kilometros, FechaHora, IdUsuario) "
+            "VALUES (%s, %s, %s, %s)",
+            (id_auto, km, fecha, int(current_user["id"])))
+        conn.commit()
+        cursor.execute("SELECT SCOPE_IDENTITY() AS id")
+        nuevo = cursor.fetchone()["id"]
+        return {
+            "ok": True, "id": int(nuevo) if nuevo is not None else None,
+            "id_automovil": id_auto, "kilometros": km,
+            "fecha_hora": fecha.isoformat(),
+            "vehiculo": f"{auto['MarcaModelo']} ({auto['Placas']})",
+            "km_previo": km_previo,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        conn.close()
+
 # --- Servir frontend compilado (dist/) si existe; si no, la API sigue sola ---
 # El build de Vite genera dist/ y Docker lo copia a la imagen. Este bloque
 # (definido AL FINAL para no tapar las rutas de la API) sirve:
@@ -4350,7 +4674,7 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas"}
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas", "kilometros"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}
