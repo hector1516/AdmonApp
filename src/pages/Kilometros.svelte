@@ -23,6 +23,11 @@
 	let vehiculos = $state([]);
 	let recientes = $state([]);
 
+	// ── Detalle (overlay al pressionar una tarjeta) ──────────────────────────
+	let detalle = $state(null);
+	let detalleId = $state(null);
+	let detalleCargando = $state(false);
+
 	// ── Captura ───────────────────────────────────────────────────────────────
 	let selVehiculo = $state('');
 	let km = $state(null);
@@ -121,6 +126,24 @@
 			.then((c) => (consumo = c))
 			.catch((e) => (error = e.message))
 			.finally(() => (busy = false));
+	}
+
+	async function abrirDetalle(id) {
+		detalleId = id;
+		detalleCargando = true;
+		detalle = null;
+		try {
+			detalle = await api.get(`/kilometros/vehiculo/${id}?n=40`);
+		} catch (e) {
+			error = e.message || 'No se pudo abrir el detalle del vehículo.';
+		} finally {
+			detalleCargando = false;
+		}
+	}
+
+	function cerrarDetalle() {
+		detalle = null;
+		detalleId = null;
 	}
 
 	function alElegirVehiculo() {
@@ -236,38 +259,36 @@
 				(x {fmtMXN(consumo.monto_vale)} cada uno).
 			</p>
 
-			<!-- Tarjetas por automóvil (mismo estilo que Tickets de OxxoGas) -->
+			<!-- Tarjetas por automóvil (mismo estilo que Tickets de OxxoGas).
+			     Solo los que tienen kilómetros registrados alguna vez. -->
 			<div class="grid">
-				{#each consumo.vehiculos as v (v.id)}
+				{#each consumo.vehiculos.filter((v) => v.tiene_registros) as v (v.id)}
 					{@const delta = v.consumo_km - v.consumo_ant}
-					<div class="card-auto" class:sin-lectura={v.registros === 0}>
+					<button class="card-auto" class:sin-lectura={v.registros === 0}
+						onclick={() => abrirDetalle(v.id)} title="Ver detalle del vehículo">
 						<div class="body">
 							<div class="folio">{v.placas || 'SIN PLACAS'}</div>
 							<div class="fecha">{v.marca_modelo || '—'}</div>
 
 							<div class="consumo">
-								{#if v.registros >= 2}
-									<span class="consumo-num">{fmtNum(v.consumo_km)}</span><span class="consumo-unit">km</span>
+								{#if v.comparable}
+									<span class="consumo-num">{fmtNum(v.consumo_km)}</span><span class="consumo-unit">km esta semana</span>
 								{:else}
-									<span class="consumo-num apagado">—</span><span class="consumo-unit">sin diferencia</span>
+									<span class="consumo-num apagado">—</span><span class="consumo-unit">sin lectura esta semana</span>
 								{/if}
 							</div>
 
 							<div class="chips">
-								{#if v.registros === 0}
-									<span class="chip pend">Sin lectura</span>
-								{:else if v.registros === 1}
-									<span class="chip pend">1 lectura</span>
+								<span class="chip vale">🎫 {v.vales} {v.vales === 1 ? 'ticket' : 'tickets'}</span>
+								{#if v.registros > 0}
+									<span class="chip ok">{v.registros} {v.registros === 1 ? 'lectura' : 'lecturas'}</span>
 								{:else}
-									<span class="chip ok">{v.registros} lecturas</span>
-									{#if v.consumo_ant > 0}
-										<span class="chip" class:subio={delta > 0} class:bajo={delta < 0}>
-											{delta > 0 ? '▲' : delta < 0 ? '▼' : '='} {fmtNum(Math.abs(delta))} vs. ant.
-										</span>
-									{/if}
+									<span class="chip pend">sin lectura esta semana</span>
 								{/if}
-								{#if v.vales > 0}
-									<span class="chip vale">⛽ {v.vales} {v.vales === 1 ? 'vale' : 'vales'} · {fmtMXN(v.monto_vales)}</span>
+								{#if v.consumo_ant > 0}
+									<span class="chip" class:subio={delta > 0} class:bajo={delta < 0}>
+										{delta > 0 ? '▲' : delta < 0 ? '▼' : '='} {fmtNum(Math.abs(delta))} vs. semana pasada
+									</span>
 								{/if}
 								{#if v.requiere_servicio}
 									<span class="chip warn">🔧 Requiere servicio</span>
@@ -276,14 +297,15 @@
 
 							{#if v.conductor}<div class="row">👤 {v.conductor}</div>{/if}
 							<div class="row">🛞 Odómetro: {fmtNum(v.km_actuales)} km</div>
-							{#if v.registros >= 2}
-								<div class="row">↔️ {fmtNum(v.primer_km)} → {fmtNum(v.ultimo_km)}</div>
+							{#if v.comparable}
+								<div class="row">↔️ {fmtNum(v.ultimo_km_pasada)} → {fmtNum(v.ultimo_km)} (sem. pasada → esta)</div>
 							{/if}
 							{#if v.kms_desde_servicio !== null}
 								<div class="row">🔧 {fmtNum(v.kms_desde_servicio)} km desde el último servicio</div>
 							{/if}
+							<div class="row ver">👆 Toca para ver lecturas y tickets</div>
 						</div>
-					</div>
+					</button>
 				{/each}
 			</div>
 
@@ -343,6 +365,66 @@
 			<p class="hint" style="margin: 0.6rem 0 0;">
 				Un registro por automóvil por día. Lo capturado aquí o en el HUB aparece en la pestaña de consumo.
 			</p>
+		</div>
+	{/if}
+
+	<!-- ═══ DETALLE DEL VEHÍCULO (overlay) ═══ -->
+	{#if detalleId !== null}
+		<div class="overlay" role="dialog" aria-modal="true" onclick={(e) => e.target === e.currentTarget && cerrarDetalle()}>
+			<div class="panel">
+				<button class="cerrar" onclick={cerrarDetalle} title="Cerrar">✕</button>
+
+				{#if detalleCargando}
+					<div class="state">⏳ Cargando detalle…</div>
+				{:else if detalle}
+					{@const v = detalle.vehiculo}
+					<div class="folio grande">{v.placas || 'SIN PLACAS'}</div>
+					<div class="sub-modelo">{v.marca_modelo || '—'}{v.conductor ? ` · ${v.conductor}` : ''}</div>
+
+					<div class="mini-kpis">
+						<div class="mini"><div class="mini-lbl">Odómetro</div><div class="mini-val">{fmtNum(v.km_actuales)} km</div></div>
+						<div class="mini"><div class="mini-lbl">Lecturas</div><div class="mini-val">{v.total_registros}</div></div>
+						<div class="mini"><div class="mini-lbl">Tickets</div><div class="mini-val">{v.total_tickets}</div></div>
+					</div>
+					{#if v.kms_desde_servicio !== null}
+						<p class="hint" style="margin: 0.4rem 0 0;">
+							🔧 {fmtNum(v.kms_desde_servicio)} km desde el último servicio
+							{#if v.requiere_servicio}<span class="chip warn" style="margin-left:.4rem;">requiere servicio</span>{/if}
+							{#if v.poliza} · Póliza {v.poliza}{/if}
+						</p>
+					{/if}
+
+					<h3 class="sub">🛞 Kilómetros registrados {#if v.total_registros > detalle.lecturas.length}({v.total_registros} en total, últimas {detalle.lecturas.length}){/if}</h3>
+					{#if detalle.lecturas.length === 0}
+						<p class="hint">Sin lecturas registradas.</p>
+					{:else}
+						<div class="lista">
+							{#each detalle.lecturas as k (k.id)}
+								<div class="item">
+									<span class="item-fecha mono">{fmtFecha(k.fecha_hora)}</span>
+									<span class="item-valor mono">{fmtNum(k.kilometros)} km</span>
+									{#if k.usuario}<span class="item-extra">{k.usuario}</span>{/if}
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					<h3 class="sub">🎫 Tickets registrados ({detalle.tickets.length})</h3>
+					{#if detalle.tickets.length === 0}
+						<p class="hint">Sin tickets registrados para este vehículo.</p>
+					{:else}
+						<div class="lista">
+							{#each detalle.tickets as t (t.id)}
+								<div class="item">
+									<span class="item-fecha mono">{fmtFecha(t.fecha)}</span>
+									<span class="item-valor mono">#{t.folio || '—'}</span>
+									<span class="item-extra">{t.estacion || t.descripcion || t.cliente || '—'}</span>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -409,6 +491,26 @@
 	.chip.subio { color: #fbbf24; background: rgba(251, 191, 36, 0.1); }
 	.chip.bajo { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
 	.row { font-size: 0.75rem; color: #cbd5e1; margin-top: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+	/* Overlay de detalle */
+	.overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.8); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+	.panel { position: relative; background: #0f172a; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 1.1rem 1.25rem; width: min(680px, 100%); max-height: 88vh; overflow-y: auto; }
+	.cerrar { position: absolute; top: 0.6rem; right: 0.7rem; background: transparent; border: 0; color: #94a3b8; font-size: 1.1rem; cursor: pointer; }
+	.cerrar:hover { color: #f1f5f9; }
+	.folio.grande { font-size: 1.3rem; }
+	.sub-modelo { font-size: 0.8rem; color: #94a3b8; margin-top: 0.15rem; }
+	.mini-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin: 0.8rem 0 0.4rem; }
+	.mini { background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 0.5rem 0.6rem; }
+	.mini-lbl { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; font-weight: 700; }
+	.mini-val { font-size: 1.05rem; font-weight: 800; color: #f1f5f9; }
+	.lista { display: flex; flex-direction: column; gap: 0.3rem; }
+	.item { display: flex; align-items: baseline; gap: 0.6rem; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 0.4rem 0.6rem; font-size: 0.78rem; }
+	.item-fecha { color: #94a3b8; min-width: 120px; }
+	.item-valor { color: #FFAE00; font-weight: 700; min-width: 96px; text-align: right; }
+	.item-extra { color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.row.ver { color: #64748b; font-size: 0.7rem; margin-top: 0.55rem; }
+	.card-auto { cursor: pointer; }
 
 	/* Captura */
 	.card { background: #1e293b; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 14px; padding: 1rem; }
