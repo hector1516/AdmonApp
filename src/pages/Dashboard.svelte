@@ -14,8 +14,9 @@
 		{ icon: '📇', title: 'Clientes', desc: 'Catálogo general', path: '/clientes', perm: 'acceso_cotizaciones' },
 		{ icon: '⛽', title: 'Tickets de OxxoGas', desc: 'Tickets y facturas', path: '/tickets_oxxogas', perm: 'acceso_vales_oxxogas' },
 		{ icon: '🛣️', title: 'Kilómetros', desc: 'Consumo semanal y captura', path: '/kilometros', perm: 'acceso_registro_kilometros' },
-		// Legends: visible para todos los usuarios logueados (Field la gatea con
-		// 'kilometros', permiso que no existe en Admon; los datos son de la empresa).
+		// Legends: visible para todos los usuarios logueados (en Field la gatea el
+		// permiso de kilómetros; aquí los datos son de la empresa y el ranking lo
+		// calcula el worker de workersadmon para las dos apps).
 		{ icon: '🏆', title: 'ECCSA Legends', desc: 'Ranking y puntos', path: '/legends' }
 	];
 
