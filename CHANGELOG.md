@@ -29,6 +29,12 @@
   `HUB_AiConfig`, pero la columna se llama `Model` → cada mensaje devolvía
   500. También se actualizó el modelo de respaldo a `gemini-3.5-flash-lite`
   (`api/main.py`).
+- **Al tocar una tarjeta de vehículo salía "Not Found"**: la ruta
+  `/kilometros/vehiculo/:id` tiene 4 segmentos y `App.svelte` leía el id de
+  `split('/')[2]` (que era `"vehiculo"`) en vez de `[3]`; el API respondía
+  404. Ahora el detalle abre correctamente (`src/App.svelte`).
+- Se quitó la leyenda "N requieren servicio (≥9,500 km) / Ninguno requiere
+  servicio" de debajo del KPI "Con lectura esta semana" en Kilómetros.
 
 ## [1.1.0] - 2026-09-27
 

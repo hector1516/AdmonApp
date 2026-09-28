@@ -241,7 +241,6 @@
 				<div class="kpi">
 					<div class="kpi-lbl">Con lectura esta semana</div>
 					<div class="kpi-val">{r.con_registro}<span class="kpi-unit">/{r.vehiculos}</span></div>
-					<div class="kpi-sub">{r.requieren_servicio > 0 ? `⚠️ ${r.requieren_servicio} requieren servicio (≥9,500 km)` : '✅ Ninguno requiere servicio'}</div>
 				</div>
 			</div>
 

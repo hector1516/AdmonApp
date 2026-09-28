@@ -181,7 +181,8 @@
 			{:else if $path === '/kilometros'}
 				<Kilometros />
 			{:else if $path.startsWith('/kilometros/vehiculo/')}
-				<KilometroVehiculo id={$path.split('/')[2]} />
+				<!-- 4 segmentos: ["", "kilometros", "vehiculo", id] → el id va en [3] -->
+				<KilometroVehiculo id={$path.split('/')[3]} />
 			{:else if $path === '/tickets_oxxogas'}
 				<TicketsOxxoGas />
 			{:else if $path.startsWith('/tickets_oxxogas/')}
