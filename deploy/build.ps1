@@ -169,7 +169,15 @@ if (-not ($envList | Where-Object { $_ -like 'HUB_DB_SERVER=*' })) {
 # en el contenedor. Si no está en ninguno, se avisa y sigue: la app degrada con
 # un mensaje claro en la UI, no revienta.
 $panelToken = $env:HUB_PANEL_TOKEN
-$tokenFile = Join-Path $root '.secrets\panel_token'
+# Ruta ABSOLUTA a propósito (no $root): la tarea programada AdmonBuild puede
+# resolver el script con otro $PSScriptRoot, y con $root el archivo no se
+# encontraba. Es la misma ruta que escribe el workflow.
+$tokenFile = 'C:\admon\.secrets\panel_token'
+if (Test-Path $tokenFile) {
+    Log ("HUB_PANEL_TOKEN: existe el archivo {0} ({1} bytes)" -f $tokenFile, (Get-Item $tokenFile).Length)
+} else {
+    Log ("HUB_PANEL_TOKEN: no existe {0}" -f $tokenFile)
+}
 if ((-not $panelToken) -and (Test-Path $tokenFile)) {
     $panelToken = (Get-Content $tokenFile -Raw).Trim()
     if ($panelToken) { Log 'HUB_PANEL_TOKEN: leido de .secrets\panel_token' }
