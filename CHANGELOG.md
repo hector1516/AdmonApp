@@ -6,6 +6,8 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **Fix CI**: el popup de novedades del banner (y el check `Check shell`) exige
+  que cada cambio quepa en 160 caracteres. Se acortó el del botón Dashboard.
 - **Fix CI "Check shell"**: el badge 📡 de la MAC en la lista de Usuarios se
   había puesto en `src/styles/app.css`, que es el CSS del shell canónico (lo
   genera `tools/sync_shell.py` y el CI valida por hash). Se movió al estilo
