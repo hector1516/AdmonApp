@@ -6,6 +6,14 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **Fix regression**: un rebuild con `dist/` viejo borró del contenedor el UI
+  recién publicado (botón "📊 Dashboard" y el campo de MAC del teléfono dejaron
+  de verse). El ServerVM no tiene npm, y `deploy/build.ps1` caía en "usar el
+  dist/ precompilado" de `C:\admon`, que estaba desactualizado. Ahora el
+  rebuild compila el frontend igual que hotsync: en un contenedor efímero
+  `node:20-alpine` (npm ci && npm run build) y aborta si no genera `dist/`,
+  dejando la producción intacta. El dist siempre refleja el commit recién
+  hecho `git pull`.
 - **HUB_PANEL_TOKEN**: el control remoto de la TV necesita este secret en el env
   del contenedor, y un env no se puede mutar en caliente. Se creó el Secret
   `HUB_PANEL_TOKEN` en el repo, `deploy/build.ps1` lo inyecta al recrear el

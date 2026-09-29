@@ -99,10 +99,18 @@ if ($hasNode) {
     npm run build 2>&1 | Select-Object -Last 8 | ForEach-Object { Log "  $_" }
     if ($LASTEXITCODE -ne 0) { Fail 'npm run build fallo' }
 } else {
-    Log 'AVISO: node/npm no estan en este host: se usa el dist/ precompilado'
-    Log '       (compilar en el equipo de desarrollo y copiarlo a C:\admon\dist)'
+    # El ServerVM no tiene node/npm en el host. En vez de comerse un dist/
+    # viejo (así se perdieron las pestañas y las MAC: la imagen horneó un
+    # index-*.js de días atrás y borró lo que hotsync ya había publicado),
+    # se compila acá mismo con el mismo node que usa hotsync.sh: un contenedor
+    # efímero node:20-alpine. Así el rebuild siempre hornea el código recién
+    # hecho git pull, no el dist/ que quedó en disco.
+    Log 'sin npm en el host → compilando el frontend en node:20-alpine (docker)'
+    docker run --rm -v "${root}:/app" -v /app/node_modules -w /app node:20-alpine `
+        sh -c 'npm ci && npm run build' 2>&1 | Select-Object -Last 8 | ForEach-Object { Log "  $_" }
+    if ($LASTEXITCODE -ne 0) { Fail 'build del frontend en docker falló (producción NO se tocó)' }
     if (-not (Test-Path (Join-Path $root 'dist\assets'))) {
-        Fail 'no hay dist/ y este host no tiene node para generarlo'
+        Fail 'el build en docker no dejó dist/ (producción NO se tocó)'
     }
 }
 $bundle = (Get-ChildItem -Path (Join-Path $root 'dist\assets') -Filter 'index-*.js' -ErrorAction SilentlyContinue | Select-Object -First 1).Name
