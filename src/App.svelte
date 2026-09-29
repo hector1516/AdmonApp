@@ -191,6 +191,9 @@
 			{:else if $path === '/panel'}
 				<!-- Botón "Dashboard" del menú: página de pestañas -->
 				<Panel />
+			{:else if $path === '/pantalla_tv'}
+				<!-- Pestaña "Pantalla de la TV" del Dashboard -->
+				<Panel initialTab="pantalla" />
 			{:else if $path === '/notas'}
 				<!-- Alias: abre el Dashboard con la pestaña Notas activa
 				     (bookmarks, prefetch y deep-links) -->

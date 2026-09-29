@@ -2,6 +2,7 @@
   "app": "admon",
   "version": "1.2.0",
   "cambios": [
+    "📺 Nueva pestaña Pantalla de la TV: control remoto del kiosco (ver/avanzar/pausar/seguir) y subida de la imagen de portada que muestra la pantalla.",
     "📊 Nuevo botón Dashboard en el menú: con pestañas; la primera es 📺 Pantalla de la TV (las notas que salen en la pantalla de la oficina) y ahí se irán sumando más funciones.",
     "📡 En Usuarios puedes anotar la MAC del teléfono: la lista muestra su badge 📡 y la ficha indica si está en la oficina y su última entrada/salida.",
     "📝 Nuevo módulo Notas: notas del equipo con autor, color, 📌 fijar y editor; se capturan en Admon y aparecen solas en la pantalla 📌 del Dashboard de la oficina.",

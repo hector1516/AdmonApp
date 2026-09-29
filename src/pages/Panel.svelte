@@ -3,13 +3,14 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import Notas from './Notas.svelte';
+	import PantallaTv from './PantallaTv.svelte';
 
 	// 📊 Dashboard (el botón del menú): página contenedora de PESTAÑAS con
 	// las funciones nuevas de la app. Hoy vive aquí la pantalla de la TV
 	// (notas que se capturan acá y salen solas en el Dashboard de la
 	// oficina) y las que se vayan agregando entrarán como más pestañas.
-	// La siguiente pestaña que se pidió: "📸 Imagen de la TV" (subir la
-	// imagen que se proyecta), como la llamada "Pantalla de la TV" en HUB.
+	// La segunda pestaña, "📺 Pantalla de la TV", trae el control remoto del
+	// kiosco y la subida de la imagen de portada.
 	//
 	// Para AGREGAR una pestaña nueva:
 	//   1) agrega su entrada en TABS (id · icono · etiqueta · ruta),
@@ -19,7 +20,8 @@
 	// compartir, el botón ⬅️ del navegador retrocede y el deep-link abre
 	// directo en esa pestaña.
 	const TABS = [
-		{ id: 'notas', icon: '📺', label: 'Pantalla de la TV', path: '/notas' }
+		{ id: 'notas', icon: '📝', label: 'Notas', path: '/notas' },
+		{ id: 'pantalla', icon: '📺', label: 'Pantalla de la TV', path: '/pantalla_tv' }
 	];
 
 	// initialTab lo pasa App.svelte según la ruta (/panel → primera pestaña,
@@ -50,10 +52,13 @@
 	</nav>
 
 	{#if tab === 'notas'}
-		<!-- Pestaña "Pantalla de la TV": el módulo de notas completo
-		     (HUB_DashboardNotas, la misma tabla que lee la pantalla 📌 del
-		     Dashboard de la oficina) -->
+		<!-- Pestaña Notas: el módulo completo (HUB_DashboardNotas, la misma
+		     tabla que lee la pantalla 📌 del Dashboard de la oficina) -->
 		<Notas embebido />
+	{:else if tab === 'pantalla'}
+		<!-- Pestaña Pantalla de la TV: control remoto del kiosco + imagen de
+		     portada (HUB_PantallaImagenes) -->
+		<PantallaTv />
 	{/if}
 </div>
 

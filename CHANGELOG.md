@@ -6,6 +6,28 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **Pestaña "Pantalla de la TV"** (📺): segunda pestaña del botón Dashboard con
+  (a) el **control remoto del kiosco** y (b) la **imagen de portada**.
+  - Control remoto contra el panel del snapshotter: `GET /api/panel/estado`
+    (sin token, trae si la TV está conectada, las 12 pantallas que publica la
+    propia TV al arrancar y el último comando con su confirmación) y
+    `POST /api/panel/comando` (CON token: acciones `ver` | `avanzar` | `pausa` |
+    `seguir`; `ver` reinicia el contador a 45 s). Los botones de pantalla se
+    dibujan con lo que llegue, sin lista fija; la TV consulta cada 3 s, por eso
+    la UI avisa "enviado" y luego muestra el "confirmado". Pausa y seguir van
+    juntos para no congelar la pantalla sin salida.
+  - El token es `HUB_PANEL_TOKEN` (GitHub Secret + variable de entorno);
+    nunca en el código. Sin él el panel responde 403 y la app lo reporta en vez
+    de fallar en silencio.
+  - Imagen de portada: se sube a `HUB_PantallaImagenes` por la API y **no** se
+    manda por HTTP al kiosco — el snapshotter la lee de ahí y la TV la toma en
+    su próxima vuelta. Endpoints `GET/POST /api/pantalla/portada`,
+    `POST .../{id}/restaurar`, `DELETE .../{id}`; la lógica vive en
+    `api/notas_pantalla.py`. Se guarda la activa y las anteriores se
+    desactivan (índice único por clave), así que se puede volver a una anterior
+    sin resubirla; la activa no se puede borrar. Avisa si no mide 1920×1080.
+  - Migración `0042_imagen_pantalla.sql` (idempotente; la tabla ya existía en
+    producción por la 0041 del repo HUB — **no** se volvió a aplicar esa).
 - **Botón "Dashboard" con pestañas**: nuevo botón `📊 Dashboard` en el menú
   que abre una página de pestañas (`src/pages/Panel.svelte`, ruta `/panel`)
   con la pestaña **📺 Pantalla de la TV** dentro (el módulo de notas, antes
