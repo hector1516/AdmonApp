@@ -85,11 +85,30 @@
 	.brand-col { display: flex; flex-direction: column; gap: 0; }
 	.brand { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 1.2rem; }
 	.brand-logo { width: 34px; height: 34px; object-fit: cover; border-radius: 8px; }
-	.menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+	/* Menú de módulos: columnas por resolución, siempre estirando a lo ancho
+	   (lo acordado: <560px → 2 · 560-899 → 3 · 900-1279 → 4 · 1280+ → 5).
+
+	   El shell trae .module-card global con aspect-ratio: 1 y max-height: 230px
+	   (el look cuadrado de Field). Aplicado acá rompía el estirado: en la PC la
+	   tarjeta se achicaba a un cuadrado de 230px pegado a la izquierda y dejaba
+	   un hueco enorme al centro. Se anula aquí, en el alcance de esta página,
+	   sin tocar el CSS del shell (que Field sigue usando cuadrado). */
+	.menu-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+	@media (min-width: 560px) {
+		.menu-grid { grid-template-columns: repeat(3, 1fr); }
+	}
+	@media (min-width: 900px) {
+		.menu-grid { grid-template-columns: repeat(4, 1fr); }
+	}
+	@media (min-width: 1280px) {
+		.menu-grid { grid-template-columns: repeat(5, 1fr); }
+	}
 	.module-card {
 		position: relative;
 		display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem;
-		min-height: 176px; height: 100%; padding: 1.25rem 0.75rem;
+		min-height: 160px; height: auto; padding: 1.25rem 0.75rem;
+		aspect-ratio: auto;
+		max-height: none;
 		background: var(--color-surface);
 		border: 1px solid rgba(255,255,255,0.05); border-radius: 16px;
 		cursor: pointer; transition: all 0.15s; text-align: center;

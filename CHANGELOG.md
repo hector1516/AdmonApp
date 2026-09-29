@@ -6,6 +6,14 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **Menú de módulos**: las tarjetas se volvían cuadradas de ~230px y dejaban
+  un hueco enorme al centro en la PC. El shell global `.module-card` trae
+  `aspect-ratio: 1` + `max-height: 230px` (el look cuadrado de Field) y el menú
+  de Admon solo tenía `1fr 1fr` fijo, sin breakpoints. Ahora `.menu-grid` usa
+  columnas por resolución (2 <560px · 3 ≥560 · 4 ≥900 · 5 ≥1280) y la tarjeta
+  se anula el aspecto cuadrado en el alcance de `src/pages/Dashboard.svelte`
+  (`aspect-ratio: auto`), sin tocar `styles/app.css` (CSS del shell, validado
+  por hash). Medido con el CSS compilado: 1920 → 5 columnas de 365px de ancho.
 - **Fix regression**: un rebuild con `dist/` viejo borró del contenedor el UI
   recién publicado (botón "📊 Dashboard" y el campo de MAC del teléfono dejaron
   de verse). El ServerVM no tiene npm, y `deploy/build.ps1` caía en "usar el
