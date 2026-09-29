@@ -68,7 +68,7 @@
 		/>
 	</div>
 
-	<div class="menu-grid">
+	<div class="module-grid">
 		{#each modules as mod}
 			{#if visible(mod)}
 				<button class="module-card" on:click={() => go(mod)}>
@@ -85,38 +85,11 @@
 	.brand-col { display: flex; flex-direction: column; gap: 0; }
 	.brand { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 1.2rem; }
 	.brand-logo { width: 34px; height: 34px; object-fit: cover; border-radius: 8px; }
-	/* Menú de módulos: columnas por resolución, siempre estirando a lo ancho
-	   (lo acordado: <560px → 2 · 560-899 → 3 · 900-1279 → 4 · 1280+ → 5).
+	/* Menú de módulos: la grilla y las tarjetas las pinta el shell
+	   (.module-grid con las columnas por resolución y .module-card
+	   rectangular de alto por contenido). El fix de estirar las tarjetas ya
+	   no vive acá como un bloque propio: con el shell queda en un solo lado,
+	   y esta página no lo sobrescribe. */
 
-	   El shell trae .module-card global con aspect-ratio: 1 y max-height: 230px
-	   (el look cuadrado de Field). Aplicado acá rompía el estirado: en la PC la
-	   tarjeta se achicaba a un cuadrado de 230px pegado a la izquierda y dejaba
-	   un hueco enorme al centro. Se anula aquí, en el alcance de esta página,
-	   sin tocar el CSS del shell (que Field sigue usando cuadrado). */
-	.menu-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
-	@media (min-width: 560px) {
-		.menu-grid { grid-template-columns: repeat(3, 1fr); }
-	}
-	@media (min-width: 900px) {
-		.menu-grid { grid-template-columns: repeat(4, 1fr); }
-	}
-	@media (min-width: 1280px) {
-		.menu-grid { grid-template-columns: repeat(5, 1fr); }
-	}
-	.module-card {
-		position: relative;
-		display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem;
-		min-height: 160px; height: auto; padding: 1.25rem 0.75rem;
-		aspect-ratio: auto;
-		max-height: none;
-		background: var(--color-surface);
-		border: 1px solid rgba(255,255,255,0.05); border-radius: 16px;
-		cursor: pointer; transition: all 0.15s; text-align: center;
-		color: var(--color-text); font-family: inherit;
-	}
-	.module-card:active { transform: scale(0.97); background: var(--color-surface-2); }
-	.module-icon { font-size: 2.5rem; line-height: 1; height: 2.5rem; display: flex; align-items: center; }
-	.module-title { font-weight: 700; font-size: 0.95rem; line-height: 1.25; min-height: 2.4em; display: flex; align-items: center; }
-	.module-desc { font-size: 0.75rem; color: var(--color-text-muted); line-height: 1.3; min-height: 2.6em; }
 
 </style>
