@@ -219,6 +219,35 @@ jobs:
       # configuración de siempre (puertos, red, volumes y credenciales que saca
       # del contenedor actual). Y va por schtasks, no por SSH, porque Windows
       # mata los procesos hijos al cerrarse la sesión.
+      # El rebuild real NO corre desde este job: lo lanza la tarea programada
+      # AdmonBuild (schtasks), o sea un proceso de Windows hijo de otra
+      # sesión. Eso ROMPE la cadena de entorno: aunque este job tenga el secret
+      # en $env, build.ps1 no lo ve. Por eso el secret se deja en un archivo
+      # en disco (C:\admon\.secrets\panel_token) y build.ps1 lo lee de ahí.
+      # El archivo queda FUERA de git (.gitignore) y solo en el ServerVM.
+      - name: Depositar HUB_PANEL_TOKEN para el rebuild
+        if: steps.gate.outputs.modo == 'rebuild'
+        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
+        env:
+          PANEL_TOKEN: ${{ secrets.HUB_PANEL_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PANEL_TOKEN) {
+            Write-Host '::warning::secrets.HUB_PANEL_TOKEN vacio; el rebuild seguira sin el (la app avisa en la UI)'
+            exit 0
+          }
+          $dir = 'C:\admon\.secrets'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          # Se escribe el valor pelado: build.ps1 lo lee y lo pasa con -e.
+          # El archivo no se imprime ni se sube a ningun lado.
+          Set-Content -Path "$dir\panel_token" -Value $env:PANEL_TOKEN -Encoding ascii -NoNewline
+          # Git no debe verlo nunca.
+          $gi = 'C:\admon\.gitignore'
+          if (-not (Select-String -Path $gi -Pattern '^\.secrets/' -Quiet -ErrorAction SilentlyContinue)) {
+            Add-Content -Path $gi -Value "`n# secretos locales del deploy (nunca al repo)`n.secrets/"
+          }
+          Write-Host ('HUB_PANEL_TOKEN depositado en {0}\panel_token ({1} bytes)' -f $dir, $env:PANEL_TOKEN.Length)
+
       - name: Rebuild
         if: steps.gate.outputs.modo == 'rebuild'
         shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'

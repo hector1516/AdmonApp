@@ -158,6 +158,33 @@ $envList = $envList | ForEach-Object {
 if (-not ($envList | Where-Object { $_ -like 'HUB_DB_SERVER=*' })) {
     $envList += "HUB_DB_SERVER=$DbServerLocal"
 }
+
+# Secret de escritura del panel del kiosco (control remoto de la TV de la
+# oficina). Vive como GitHub Secret y NO está en el repo. El rebuild se lanza
+# por schtasks (proceso de otra sesión), así que la cadena de entorno del
+# workflow no llega acá: el workflow deposita el valor en
+# C:\admon\.secrets\panel_token (fuera de git) y este script lo lee de ahí.
+#
+# Precedencia: entorno ($env) > archivo .secrets\panel_token > env ya presente
+# en el contenedor. Si no está en ninguno, se avisa y sigue: la app degrada con
+# un mensaje claro en la UI, no revienta.
+$panelToken = $env:HUB_PANEL_TOKEN
+$tokenFile = Join-Path $root '.secrets\panel_token'
+if ((-not $panelToken) -and (Test-Path $tokenFile)) {
+    $panelToken = (Get-Content $tokenFile -Raw).Trim()
+    if ($panelToken) { Log 'HUB_PANEL_TOKEN: leido de .secrets\panel_token' }
+}
+if ($panelToken) {
+    $envList = $envList | Where-Object { $_ -notlike 'HUB_PANEL_TOKEN=*' }
+    $envList += "HUB_PANEL_TOKEN=$panelToken"
+    Log 'HUB_PANEL_TOKEN: presente -> se inyecta al contenedor'
+} elseif ($envList | Where-Object { $_ -like 'HUB_PANEL_TOKEN=*' }) {
+    Log 'HUB_PANEL_TOKEN: ya venía en el contenedor -> se conserva'
+} else {
+    Log 'AVISO · HUB_PANEL_TOKEN no esta en el entorno, ni en .secrets\, ni en el contenedor.'
+    Log '         El control remoto de la TV quedara deshabilitado (la app lo avisa).'
+}
+
 foreach ($e in $envList) { $runArgs += @('-e', $e) }
 $runArgs += "${image}:latest"
 # Oculta los secretos: el log se lee en pantalla y a veces se comparte.

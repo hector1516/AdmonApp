@@ -6,6 +6,14 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **HUB_PANEL_TOKEN**: el control remoto de la TV necesita este secret en el env
+  del contenedor, y un env no se puede mutar en caliente. Se creó el Secret
+  `HUB_PANEL_TOKEN` en el repo, `deploy/build.ps1` lo inyecta al recrear el
+  contenedor (lo lee de `C:\admon\.secrets\panel_token`, fuera de git, porque
+  el rebuild se lanza por `schtasks` y no hereda el entorno del workflow), el
+  deploy normal lo deposita antes de cada rebuild, y se agrega
+  `.github/workflows/apply-panel-token.yml` para (re)aplicarlo a mano sin push.
+  El valor nunca está en el repo ni en los logs.
 - **Fix CI**: el popup de novedades del banner (y el check `Check shell`) exige
   que cada cambio quepa en 160 caracteres. Se acortó el del botón Dashboard.
 - **Fix CI "Check shell"**: el badge 📡 de la MAC en la lista de Usuarios se
