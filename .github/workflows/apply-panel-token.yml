@@ -48,6 +48,19 @@ jobs:
           Set-Content -Path "$dir\panel_token" -Value $env:PANEL_TOKEN -Encoding ascii -NoNewline
           Write-Host ('OK · depositado en {0}\panel_token' -f $dir)
 
+      - name: Estado previo de C:\admon
+        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host ('HEAD  : ' + (git -C C:\admon rev-parse --short HEAD))
+          $dirty = git -C C:\admon status --porcelain
+          Write-Host ('sucio : ' + $(if ($dirty) { (($dirty | Select-Object -First 5) -join '; ') } else { 'no' }))
+          $b = 'C:\admon\deploy\build.ps1'
+          Write-Host ('build.ps1 tiene node:20-alpine : ' + (Select-String -Path $b -Pattern 'node:20-alpine' -Quiet))
+          Write-Host ('build.ps1 tiene ruta absoluta token : ' + (Select-String -Path $b -Pattern "C:\\admon\\.secrets" -Quiet))
+          $dist = Get-ChildItem 'C:\admon\dist\assets\index-*.js' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dist) { Write-Host ('dist : ' + $dist.Name + '  ' + $dist.LastWriteTime) } else { Write-Host 'dist : NO EXISTE' }
+
       - name: Recrear el contenedor (AdmonBuild)
         shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
         run: |
@@ -62,7 +75,10 @@ jobs:
             $log = Get-Content $logPath -ErrorAction SilentlyContinue
             $line = $log | Select-String 'FIN rc=(\d+)' | Select-Object -Last 1
             if ($line) {
-              Get-Content $logPath -Tail 20 | ForEach-Object { Write-Host $_ }
+              # Se imprime bastante del build.log: el paso 2 (compilación del
+              # frontend) y el docker run son los que hay que poder auditar en
+              # este workflow sin volver a lanzarlo.
+              Get-Content $logPath -Tail 120 | ForEach-Object { Write-Host $_ }
               $rc = [int]$line.Matches[0].Groups[1].Value
               break
             }
