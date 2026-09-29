@@ -6,6 +6,10 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **Fix CI "Check shell"**: el badge 📡 de la MAC en la lista de Usuarios se
+  había puesto en `src/styles/app.css`, que es el CSS del shell canónico (lo
+  genera `tools/sync_shell.py` y el CI valida por hash). Se movió al estilo
+  local de `Usuarios.svelte`; el archivo del shell queda intacto.
 - **Pestaña "Pantalla de la TV"** (📺): segunda pestaña del botón Dashboard con
   (a) el **control remoto del kiosco** y (b) la **imagen de portada**.
   - Control remoto contra el panel del snapshotter: `GET /api/panel/estado`

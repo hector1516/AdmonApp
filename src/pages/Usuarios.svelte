@@ -84,3 +84,15 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	/* MAC del teléfono (Detección de Red 📡): monoespaciada para leerla de un
+	   vistazo. Va aquí y no en styles/app.css porque ese archivo es del shell
+	   canónico (lo genera tools/sync_shell.py) y el CI lo valida. */
+	.badge-mac {
+		background: rgba(52, 211, 153, 0.14);
+		color: #34D399;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		letter-spacing: 0.02em;
+	}
+</style>
