@@ -5,8 +5,11 @@
 	import Notas from './Notas.svelte';
 
 	// 📊 Dashboard (el botón del menú): página contenedora de PESTAÑAS con
-	// las funciones nuevas de la app. Hoy vive aquí Notas (antes era página
-	// propia) y las que se vayan agregando entrarán como más pestañas.
+	// las funciones nuevas de la app. Hoy vive aquí la pantalla de la TV
+	// (notas que se capturan acá y salen solas en el Dashboard de la
+	// oficina) y las que se vayan agregando entrarán como más pestañas.
+	// La siguiente pestaña que se pidió: "📸 Imagen de la TV" (subir la
+	// imagen que se proyecta), como la llamada "Pantalla de la TV" en HUB.
 	//
 	// Para AGREGAR una pestaña nueva:
 	//   1) agrega su entrada en TABS (id · icono · etiqueta · ruta),
@@ -16,7 +19,7 @@
 	// compartir, el botón ⬅️ del navegador retrocede y el deep-link abre
 	// directo en esa pestaña.
 	const TABS = [
-		{ id: 'notas', icon: '📝', label: 'Notas', path: '/notas' }
+		{ id: 'notas', icon: '📺', label: 'Pantalla de la TV', path: '/notas' }
 	];
 
 	// initialTab lo pasa App.svelte según la ruta (/panel → primera pestaña,
@@ -47,8 +50,9 @@
 	</nav>
 
 	{#if tab === 'notas'}
-		<!-- Pestaña Notas: el módulo completo (HUB_DashboardNotas, el mismo
-		     que lee la pantalla 📌 del Dashboard de la oficina) -->
+		<!-- Pestaña "Pantalla de la TV": el módulo de notas completo
+		     (HUB_DashboardNotas, la misma tabla que lee la pantalla 📌 del
+		     Dashboard de la oficina) -->
 		<Notas embebido />
 	{/if}
 </div>

@@ -12,7 +12,7 @@
 		{ icon: '🤖', title: 'ECCSA IA', desc: 'Asistente inteligente', path: '/ia' },
 		// Botón "Dashboard": abre la página de pestañas (Notas y las que se
 		// vayan agregando) — ver src/pages/Panel.svelte.
-		{ icon: '📊', title: 'Dashboard', desc: 'Notas y nuevas funciones', path: '/panel' },
+		{ icon: '📊', title: 'Dashboard', desc: 'Pantalla de la TV y más', path: '/panel' },
 		{ icon: '📦', title: 'Cotizaciones Materiales', desc: 'Crear y gestionar', path: '/cotizaciones_materiales', perm: 'acceso_cotizaciones' },
 		{ icon: '📋', title: 'Registro de Reportes', desc: 'Visualización global admin', path: '/registro_reportes', perm: 'acceso_registro_reportes' },
 		{ icon: '👥', title: 'Administrador de Usuarios', desc: 'Usuarios y permisos', path: '/usuarios', perm: 'acceso_usuarios' },

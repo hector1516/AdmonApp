@@ -8,8 +8,8 @@
 ### Nuevo
 - **Botón "Dashboard" con pestañas**: nuevo botón `📊 Dashboard` en el menú
   que abre una página de pestañas (`src/pages/Panel.svelte`, ruta `/panel`)
-  con el módulo **Notas** dentro como primera pestaña (antes era página
-  propia) y sitio para las próximas funciones. Cada pestaña es una ruta real
+  con la pestaña **📺 Pantalla de la TV** dentro (el módulo de notas, antes
+  página propia) y sitio para las próximas funciones. Cada pestaña es una ruta real
   (`/panel`, `/notas`): el enlace se puede compartir, el botón atrás del
   navegador retrocede de pestaña y `/notas` queda como alias que abre el
   Panel con Notas activa (bookmarks y prefetch siguen igual). Para sumar
