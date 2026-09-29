@@ -6,6 +6,15 @@
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
+- **Dashboard con pestañas**: el Dashboard de Admon ahora es un contenedor de
+  pestañas con barra superior (`🏠 Inicio` = menú de módulos y `📝 Notas` = el
+  módulo completo embebido). Cada pestaña es una ruta real (`/dashboard`,
+  `/notas`): el enlace se puede compartir, el botón atrás del navegador
+  retrocede de pestaña y `/notas` queda como alias que abre el Dashboard con
+  Notas activa (libros marcados y prefetch siguen igual). Se quitó la tarjeta
+  📝 del menú por ser ya pestaña. Para sumar funciones nuevas solo se agrega
+  una entrada al arreglo `TABS` de `Dashboard.svelte`, su ruta en `App.svelte`
+  y su bloque `{#if}` (así vienen las próximas pestañas).
 - **MAC del teléfono en Usuarios** (📡): la ficha de usuario tiene un campo
   nuevo para anotar la MAC del celular, que se guarda/relaciona en
   `HUB_NetworkDevices` (la tabla del escáner de Detección de Red, por

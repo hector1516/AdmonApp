@@ -2,6 +2,7 @@
   "app": "admon",
   "version": "1.2.0",
   "cambios": [
+    "🗂️ El Dashboard ahora tiene pestañas: 🏠 Inicio (menú) y 📝 Notas (el módulo completo, antes en su propia página).",
     "📡 En Usuarios puedes anotar la MAC del teléfono: la lista muestra su badge 📡 y la ficha indica si está en la oficina y su última entrada/salida.",
     "📝 Nuevo módulo Notas: notas del equipo con autor, color, 📌 fijar y editor; se capturan en Admon y aparecen solas en la pantalla 📌 del Dashboard de la oficina.",
     "🤖 ECCSA IA: ahora es una sola conversación continua con historial, y su botón está directo en el Dashboard.",

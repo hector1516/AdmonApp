@@ -9,6 +9,13 @@
 	// El kiosco es solo lectura: lo que se captura acá aparece solo en la TV.
 	// Color = acento de la nota en el kiosco · Fija = sale arriba del todo.
 	// Sin permiso propio (igual que ECCSA IA): todos los logueados.
+	//
+	// Se renderiza como PESTAÑA del Dashboard (prop `embebido`): en ese modo
+	// no pone su propio header ni el botón ⬅️ de volver, porque el Dashboard
+	// ya trae su encabezado y la barra de pestañas (la ruta /notas abre el
+	// Dashboard con esta pestaña activa).
+
+	let { embebido = false } = $props();
 
 	let notas = $state([]);
 	let loading = $state(true);
@@ -132,13 +139,20 @@
 	});
 </script>
 
-<div class="page">
-	<div class="header">
-		<button class="btn btn-sm btn-secondary" onclick={() => navigate('/dashboard')} title="Volver">⬅️</button>
-		<h1>📝 Notas</h1>
-		<div style="flex:1"></div>
-		<button class="btn btn-sm btn-primary" onclick={abrirNueva}>➕ Nueva nota</button>
-	</div>
+<div class:page={!embebido}>
+	{#if !embebido}
+		<div class="header">
+			<button class="btn btn-sm btn-secondary" onclick={() => navigate('/dashboard')} title="Volver">⬅️</button>
+			<h1>📝 Notas</h1>
+			<div style="flex:1"></div>
+			<button class="btn btn-sm btn-primary" onclick={abrirNueva}>➕ Nueva nota</button>
+		</div>
+	{:else}
+		<!-- Modo pestaña: el botón queda arriba a la derecha, bajo la barra de pestañas -->
+		<div class="embed-bar">
+			<button class="btn btn-sm btn-primary" onclick={abrirNueva}>➕ Nueva nota</button>
+		</div>
+	{/if}
 
 	{#if aviso}
 		<div class="nota-aviso">{aviso}</div>
@@ -215,6 +229,10 @@
 </div>
 
 <style>
+	/* Modo pestaña del Dashboard: sin padding propio (lo da la .page del
+	   Dashboard) y el botón de nueva nota alineado a la derecha. */
+	.embed-bar { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+
 	.nota-aviso {
 		padding: 0.5rem 0.75rem;
 		background: rgba(34, 197, 94, 0.12);
