@@ -34,6 +34,7 @@
 	import Kilometros from './pages/Kilometros.svelte';
 	import KilometroVehiculo from './pages/KilometroVehiculo.svelte';
 	import TicketOxxoGasDetalle from './pages/TicketOxxoGasDetalle.svelte';
+	import Panel from './pages/Panel.svelte';
 
 	let ready = $state(false);
 	let splashDone = $state(false);
@@ -187,10 +188,13 @@
 				<TicketsOxxoGas />
 			{:else if $path.startsWith('/tickets_oxxogas/')}
 				<TicketOxxoGasDetalle id={$path.split('/')[2]} />
+			{:else if $path === '/panel'}
+				<!-- Botón "Dashboard" del menú: página de pestañas -->
+				<Panel />
 			{:else if $path === '/notas'}
-				<!-- /notas = Dashboard con la pestaña Notas activa (alias de la
-				     ruta antigua: bookmarks, prefetch y la tarjeta del menú) -->
-				<Dashboard initialTab="notas" />
+				<!-- Alias: abre el Dashboard con la pestaña Notas activa
+				     (bookmarks, prefetch y deep-links) -->
+				<Panel initialTab="notas" />
 		{:else}
 			<Dashboard />
 		{/if}

@@ -10,10 +10,10 @@
 	// Color = acento de la nota en el kiosco · Fija = sale arriba del todo.
 	// Sin permiso propio (igual que ECCSA IA): todos los logueados.
 	//
-	// Se renderiza como PESTAÑA del Dashboard (prop `embebido`): en ese modo
-	// no pone su propio header ni el botón ⬅️ de volver, porque el Dashboard
-	// ya trae su encabezado y la barra de pestañas (la ruta /notas abre el
-	// Dashboard con esta pestaña activa).
+	// Se renderiza como PESTAÑA de la página "Dashboard" (el botón del menú,
+	// src/pages/Panel.svelte; prop `embebido`): en ese modo no pone su propio
+	// header ni el botón ⬅️ de volver, porque el Panel ya trae su encabezado y
+	// la barra de pestañas (la ruta /notas abre el Panel con esta pestaña).
 
 	let { embebido = false } = $props();
 

@@ -3,27 +3,6 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import ActionsBar from '../components/ActionsBar.svelte';
-	import Notas from './Notas.svelte';
-
-	// ── Pestañas del Dashboard ─────────────────────────────────────────────
-	// El Dashboard es el contenedor de pestañas de la app: la primera es el
-	// menú de módulos y las demás son funciones (Notas, y las que sigan).
-	// Para AGREGAR una pestaña nueva:
-	//   1) agrega su entrada aquí (id · icono · etiqueta · ruta),
-	//   2) registra la ruta en App.svelte → <Dashboard initialTab="su_id" />,
-	//   3) agrega su bloque {#if tab === 'su_id'} en el markup de abajo.
-	// Cada pestaña es una ruta real: el click navega, así el enlace se puede
-	// compartir, el botón ⬅️ del navegador retrocede y el deep-link abre
-	// directo en esa pestaña.
-	const TABS = [
-		{ id: 'inicio', icon: '🏠', label: 'Inicio', path: '/dashboard' },
-		{ id: 'notas', icon: '📝', label: 'Notas', path: '/notas' }
-	];
-
-	// initialTab lo pasa App.svelte según la ruta (/dashboard → inicio,
-	// /notas → notas).
-	let { initialTab = 'inicio' } = $props();
-	let tab = $state(initialTab);
 
 	// Menú de módulos estilo home de Field: icon/title/desc/path/perm.
 	// Solo módulos funcionales; cada tarjeta requiere su permiso activo.
@@ -31,6 +10,9 @@
 	// todos los usuarios logueados (el backend no exige ningún Acceso).
 	const modules = [
 		{ icon: '🤖', title: 'ECCSA IA', desc: 'Asistente inteligente', path: '/ia' },
+		// Botón "Dashboard": abre la página de pestañas (Notas y las que se
+		// vayan agregando) — ver src/pages/Panel.svelte.
+		{ icon: '📊', title: 'Dashboard', desc: 'Notas y nuevas funciones', path: '/panel' },
 		{ icon: '📦', title: 'Cotizaciones Materiales', desc: 'Crear y gestionar', path: '/cotizaciones_materiales', perm: 'acceso_cotizaciones' },
 		{ icon: '📋', title: 'Registro de Reportes', desc: 'Visualización global admin', path: '/registro_reportes', perm: 'acceso_registro_reportes' },
 		{ icon: '👥', title: 'Administrador de Usuarios', desc: 'Usuarios y permisos', path: '/usuarios', perm: 'acceso_usuarios' },
@@ -86,70 +68,23 @@
 		/>
 	</div>
 
-	<nav class="tabs" aria-label="Secciones del Dashboard">
-		{#each TABS as t (t.id)}
-			<button class="tab" class:active={tab === t.id} on:click={() => navigate(t.path)}>
-				<span class="tab-ico">{t.icon}</span>{t.label}
-			</button>
+	<div class="menu-grid">
+		{#each modules as mod}
+			{#if visible(mod)}
+				<button class="module-card" on:click={() => go(mod)}>
+					<span class="module-icon">{mod.icon}</span>
+					<span class="module-title">{mod.title}</span>
+					<span class="module-desc">{mod.desc}</span>
+				</button>
+			{/if}
 		{/each}
-	</nav>
-
-	{#if tab === 'notas'}
-		<!-- Contenido de la pestaña Notas: el módulo completo (HUB_DashboardNotas) -->
-		<Notas embebido />
-	{:else}
-		<div class="menu-grid">
-			{#each modules as mod}
-				{#if visible(mod)}
-					<button class="module-card" on:click={() => go(mod)}>
-						<span class="module-icon">{mod.icon}</span>
-						<span class="module-title">{mod.title}</span>
-						<span class="module-desc">{mod.desc}</span>
-					</button>
-				{/if}
-			{/each}
-		</div>
-	{/if}
+	</div>
 </div>
 
 <style>
 	.brand-col { display: flex; flex-direction: column; gap: 0; }
 	.brand { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 1.2rem; }
 	.brand-logo { width: 34px; height: 34px; object-fit: cover; border-radius: 8px; }
-	/* Barra de pestañas del Dashboard */
-	.tabs {
-		display: flex;
-		gap: 0.25rem;
-		margin: 0.15rem 0 1rem;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-		overflow-x: auto;
-		-webkit-overflow-scrolling: touch;
-	}
-	.tab {
-		display: flex;
-		align-items: center;
-		gap: 0.4rem;
-		padding: 0.55rem 0.9rem;
-		font-size: 0.88rem;
-		font-weight: 600;
-		font-family: inherit;
-		color: var(--color-text-muted);
-		background: transparent;
-		border: none;
-		border-bottom: 3px solid transparent;
-		border-radius: 8px 8px 0 0;
-		cursor: pointer;
-		white-space: nowrap;
-		transition: color 0.12s, background 0.12s;
-	}
-	.tab:hover { color: var(--color-text); background: rgba(255, 255, 255, 0.04); }
-	.tab.active {
-		color: var(--color-primary-light);
-		border-bottom-color: var(--color-primary);
-		background: rgba(255, 107, 0, 0.08);
-	}
-	.tab-ico { font-size: 1rem; line-height: 1; }
-
 	.menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 	.module-card {
 		position: relative;
