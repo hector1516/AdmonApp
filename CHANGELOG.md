@@ -3,6 +3,47 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.3.0] - 2026-09-30
+
+### Nuevo
+- **Artículo genérico en las partidas de cotizaciones de materiales**: campo
+  nuevo `ArticuloGenerico` en la tabla `Partidas` (migración `0043`) con el
+  nombre del artículo en lenguaje de compras ("controlador lógico",
+  "disyuntor", "cable de comunicación"), distinto de los códigos SAT que ya se
+  manejaban. Va en el PDF de la cotización dentro de la línea gris de la
+  descripción, en el orden **artículo → clave SAT → unidad**, antes pedido por
+  compras: primero cómo se llama el artículo, luego la clave fiscal.
+  - **Captura** (`src/pages/PartidasAdmin.svelte`): input propio debajo de la
+    descripción y badge 📦 en la lista de partidas; viaja en el payload de
+    alta/edición de `src/lib/cotizacionesApi.js` (y por lo tanto también en la
+    cola offline, cuyo replay en `api/main.py` ya escribe el campo).
+  - **Sugerencia 🤖** (`api/sat_helper.py`): ahora devuelve
+    `articulo_generico` además de los códigos. Reglas locales → nombre de la
+    propia regla; IA Gemini → lo pide el mismo prompt (1 sola llamada, sin
+    costo extra); índice local → se aprendió en la resolución previa y si la
+    fila es anterior se rellena con la regla en 0 tokens. Si el usuario ya
+    escribió algo en el campo, el 🤖 no lo pisa.
+  - **Conservación**: el valor se copia al clonar la cotización, se limpia a
+    `''` (no `NULL`) si se borra, y se respeta en UPDATE/DELETE. La columna va
+    al final de `Partidas`, así que los SELECT posicionales de HUB
+    (`eccsa_db.py`, que sí escribe en esa tabla) y los INSERT con lista de
+    columnas no cambian.
+- **`0044_sat_articulo_generico.sql`**: el índice auto-alimentado
+  `HUB_SatArticulos` guarda también el nombre genérico aprendido, para que el
+  🤖 lo ofrezca en 0 tokens cuando la misma descripción se repita en otra
+  cotización. Las filas anteriores a 0044 quedan con el nombre vacío y el
+  backend hace fallback a las reglas.
+
+### Técnico
+- Migraciones `0043` y `0044` aplicadas a `ECCSA_Admon_Pruebas` y a
+  producción (`ECCSA_Admon`), registradas en `schema_migrations`.
+- Prueba E2E local (uvicorn contra Pruebas) cubre alta, lectura, edición,
+  borrado a vacío, sugerencia por reglas e IA, orden en el PDF (extracción con
+  pypdf) y clonado: **TODO OK**. Archivos: `api/main.py`, `api/sat_helper.py`,
+  `api/pdf_cotizacion.py`, `src/lib/cotizacionesApi.js`,
+  `src/pages/PartidasAdmin.svelte`, `migrations/0043_*.sql`,
+  `migrations/0044_*.sql`.
+
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo

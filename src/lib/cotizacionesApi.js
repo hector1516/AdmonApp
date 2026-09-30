@@ -301,7 +301,9 @@ export async function partidaAdd(folioKey, item) {
 		flete: parseFloat(item.flete) || 0,
 		// Códigos SAT (vacío = el servidor los resuelve solo: índice → reglas → IA)
 		sat_prod_serv: (item.sat_prod_serv || '').trim(),
-		sat_unidad: (item.sat_unidad || '').trim()
+		sat_unidad: (item.sat_unidad || '').trim(),
+		// Artículo genérico de compras (distinto del código SAT): "disyuntor"
+		articulo_generico: (item.articulo_generico || '').trim()
 	};
 	if (isOnline() && row.folio != null) {
 		try {
@@ -336,7 +338,9 @@ export async function partidaUpdate(folioKey, partidaNum, item) {
 		flete: parseFloat(item.flete) || 0,
 		// Códigos SAT (vacío = el servidor re-resuelve si cambió la descripción)
 		sat_prod_serv: (item.sat_prod_serv || '').trim(),
-		sat_unidad: (item.sat_unidad || '').trim()
+		sat_unidad: (item.sat_unidad || '').trim(),
+		// Artículo genérico de compras (distinto del código SAT): "disyuntor"
+		articulo_generico: (item.articulo_generico || '').trim()
 	};
 	const key = folioKeyOf(row);
 	if (isOnline() && row.folio != null) {

@@ -1,7 +1,8 @@
 {
   "app": "admon",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "cambios": [
+    "🧾 Partidas de cotizaciones: nuevo campo artículo genérico (\"disyuntor\"); lo sugiere el 🤖 y el PDF lo imprime antes del código SAT y de la unidad.",
     "📺 Nueva pestaña Pantalla de la TV: control remoto del kiosco (ver/avanzar/pausar/seguir) y subida de la imagen de portada que muestra la pantalla.",
     "📊 Nuevo botón Dashboard en el menú, con pestañas: Notas y 📺 Pantalla de la TV (control remoto del kiosco + imagen de portada).",
     "📡 En Usuarios puedes anotar la MAC del teléfono: la lista muestra su badge 📡 y la ficha indica si está en la oficina y su última entrada/salida.",

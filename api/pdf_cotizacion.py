@@ -176,9 +176,15 @@ def build_cotizacion_pdf(header: dict, partidas: list) -> bytes:
         diass_suffix = " Dia Laboral" if delivery_days == 1 else " Dias Laborales"
         # Códigos SAT junto al tiempo de entrega, mismo estilo/tamaño/color
         # gris (PlanesFuturos.md §1); solo se imprime lo que exista.
+        # Orden: artículo genérico → clave SAT → unidad (lo pidió compras:
+        # primero cómo se llama el artículo, luego la clave fiscal).
         sat_extra = ""
+        articulo = " ".join(str(item.get("articulo_generico") or "").split())
+        if articulo:
+            articulo = articulo.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            sat_extra = f" · {articulo}"
         if item.get("sat_prod_serv"):
-            sat_extra = f" · SAT: {item['sat_prod_serv']}"
+            sat_extra += f" · SAT: {item['sat_prod_serv']}"
             if item.get("sat_unidad"):
                 sat_extra += f" · Unidad: {item['sat_unidad']}"
         desc_full = (f"{desc_clean}<br/><font color='#64748B'>"

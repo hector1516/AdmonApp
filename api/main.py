@@ -931,6 +931,7 @@ def _partida_row_to_dict(folio, row) -> dict:
     # row: Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor,
     #      Proveedor, TiempoEntregaDias, Dolar, Flete,
     #      [+ SAT opcional: ClaveProdServ, ClaveUnidad, Fuente]  (LEFT JOIN sidecar)
+    #      [+ ArticuloGenerico]  (va AL FINAL para no mover los índices SAT)
     compra = _fnum(row[3])
     factor = _fnum(row[4])
     cant = int(row[1] or 0)
@@ -939,6 +940,7 @@ def _partida_row_to_dict(folio, row) -> dict:
     sat_prod = row[9] if len(row) > 9 else None
     sat_uni = row[10] if len(row) > 10 else None
     sat_fuente = row[11] if len(row) > 11 else None
+    articulo = row[12] if len(row) > 12 else None
     return {
         "folio": folio, "partida": row[0], "cantidad": cant,
         "descripcion": row[2] or "", "precio_compra": compra, "factor": factor,
@@ -947,6 +949,7 @@ def _partida_row_to_dict(folio, row) -> dict:
         "venta_unit": venta_unit, "total_venta": venta_unit * cant + flete,
         "sat_prod_serv": sat_prod or "", "sat_unidad": sat_uni or "",
         "sat_fuente": sat_fuente or "",
+        "articulo_generico": (articulo or "").strip(),
     }
 
 
@@ -971,15 +974,16 @@ def _db_create_quotation(cur, id_cliente, contacto, descripcion, autor) -> int:
     return int(r[0])
 
 
-def _db_add_partida(cur, folio, cantidad, descripcion, precio_compra, factor, proveedor, tiempo_entrega, dolar, flete) -> int:
+def _db_add_partida(cur, folio, cantidad, descripcion, precio_compra, factor, proveedor, tiempo_entrega, dolar, flete, articulo_generico=None) -> int:
     cur.execute("SELECT ISNULL(MAX(Partida), 0) + 1 FROM Partidas WHERE Folio = %s", (int(folio),))
     r = cur.fetchone()
     nxt = int(r[0]) if r and r[0] else 1
     cur.execute(
-        "INSERT INTO Partidas (Folio, Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        "INSERT INTO Partidas (Folio, Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete, ArticuloGenerico) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (int(folio), nxt, int(cantidad), descripcion.strip(), float(precio_compra), float(factor),
-         (proveedor or "").strip(), int(tiempo_entrega or 0), float(dolar or 0.0), float(flete or 0.0)),
+         (proveedor or "").strip(), int(tiempo_entrega or 0), float(dolar or 0.0), float(flete or 0.0),
+         _clean_articulo(articulo_generico)),
     )
     return nxt
 
@@ -1000,13 +1004,13 @@ def _db_clone_quotation(cur, folio, autor) -> int:
         raise Exception("No se obtuvo el folio clonado.")
     nuevo = int(r[0])
     cur.execute(
-        "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete "
+        "SELECT Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete, ArticuloGenerico "
         "FROM Partidas WHERE Folio = %s ORDER BY Partida ASC", (int(folio),))
     for p in cur.fetchall():
         cur.execute(
-            "INSERT INTO Partidas (Folio, Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (nuevo, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8]),
+            "INSERT INTO Partidas (Folio, Partida, Cantidad, Descripcion, PrecioCompraUnitario, Factor, Proveedor, TiempoEntregaDias, Dolar, Flete, ArticuloGenerico) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (nuevo, p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9]),
         )
     # Copiar el snapshot SAT de las partidas originales al folio clonado
     # (el índice HUB_SatArticulos no se duplica, solo el sidecar por partida)
@@ -1026,6 +1030,12 @@ def _validate_partida_input(cantidad, descripcion):
         raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a 0.")
     if not (descripcion or "").strip():
         raise HTTPException(status_code=400, detail="La descripción es obligatoria.")
+
+
+def _clean_articulo(v) -> str:
+    """Artículo genérico (p. ej. 'disyuntor'): texto libre corto y en una sola
+    línea, porque se imprime dentro de la celda de descripción del PDF."""
+    return " ".join(str(v or "").split())[:200]
 
 
 # ----- Modelos -----
@@ -1061,6 +1071,10 @@ class PartidaCreate(BaseModel):
     # se guardan como captura MANUAL.
     sat_prod_serv: Optional[str] = None
     sat_unidad: Optional[str] = None
+    # Artículo genérico del artículo en compras (NO es el código SAT):
+    # "controlador lógico", "disyuntor", "cable de comunicación". Se imprime
+    # en el PDF delante del código SAT y de la unidad.
+    articulo_generico: Optional[str] = None
 
 
 class PartidaUpdate(PartidaCreate):
@@ -1287,7 +1301,7 @@ def _cotizacion_pdf_bytes(folio: int) -> tuple:
     cursor.execute(
         "SELECT P.Partida, P.Cantidad, P.Descripcion, P.PrecioCompraUnitario, P.Factor, "
         "P.Proveedor, P.TiempoEntregaDias, P.Dolar, P.Flete, "
-        "S.ClaveProdServ, S.ClaveUnidad, S.Fuente "
+        "S.ClaveProdServ, S.ClaveUnidad, S.Fuente, P.ArticuloGenerico "
         "FROM Partidas P "
         "LEFT JOIN HUB_PartidasSat S ON S.Folio = P.Folio AND S.Partida = P.Partida "
         "WHERE P.Folio = %s ORDER BY P.Partida ASC", (int(folio),))
@@ -1399,7 +1413,7 @@ async def cotizacion_partidas(folio: int, current_user: dict = Depends(get_curre
         cursor.execute(
             "SELECT P.Partida, P.Cantidad, P.Descripcion, P.PrecioCompraUnitario, P.Factor, "
             "P.Proveedor, P.TiempoEntregaDias, P.Dolar, P.Flete, "
-            "S.ClaveProdServ, S.ClaveUnidad, S.Fuente "
+            "S.ClaveProdServ, S.ClaveUnidad, S.Fuente, P.ArticuloGenerico "
             "FROM Partidas P "
             "LEFT JOIN HUB_PartidasSat S ON S.Folio = P.Folio AND S.Partida = P.Partida "
             "WHERE P.Folio = %s ORDER BY P.Partida ASC", (int(folio),))
@@ -1430,7 +1444,8 @@ async def cotizacion_partida_add(folio: int, body: PartidaCreate, current_user: 
             conn.close()
             raise HTTPException(status_code=400, detail="Cotización bloqueada.")
         num = _db_add_partida(cursor, folio, body.cantidad, body.descripcion, body.precio_compra,
-                              body.factor, body.proveedor, body.tiempo_entrega, body.dolar, body.flete)
+                              body.factor, body.proveedor, body.tiempo_entrega, body.dolar, body.flete,
+                              body.articulo_generico)
         # Hook SAT auto-alimentado (sidecar → índice → reglas → 1 llamada IA en miss)
         try:
             sat = sat_helper.guardar_partida_sat(
@@ -1468,11 +1483,12 @@ async def cotizacion_partida_update(folio: int, partida: int, body: PartidaUpdat
             raise HTTPException(status_code=400, detail="Cotización bloqueada.")
         cursor.execute(
             "UPDATE Partidas SET Cantidad = %s, Descripcion = %s, PrecioCompraUnitario = %s, "
-            "Factor = %s, Proveedor = %s, TiempoEntregaDias = %s, Dolar = %s, Flete = %s "
+            "Factor = %s, Proveedor = %s, TiempoEntregaDias = %s, Dolar = %s, Flete = %s, "
+            "ArticuloGenerico = %s "
             "WHERE Folio = %s AND Partida = %s",
             (int(body.cantidad), body.descripcion.strip(), float(body.precio_compra), float(body.factor),
              (body.proveedor or "").strip(), int(body.tiempo_entrega or 0), float(body.dolar or 0.0),
-             float(body.flete or 0.0), int(folio), int(partida)),
+             float(body.flete or 0.0), _clean_articulo(body.articulo_generico), int(folio), int(partida)),
         )
         # Hook SAT: si cambió la descripción se re-resuelve; si el usuario
         # envía códigos explícitos estos ganan (fuente MANUAL)
@@ -2121,7 +2137,8 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
                     num = _db_add_partida(cursor, folio, int(p.get("cantidad", 1)), p.get("descripcion", ""),
                                           float(p.get("precio_compra", 0.0)), float(p.get("factor", 0.0)),
                                           p.get("proveedor", ""), int(p.get("tiempo_entrega", 0) or 0),
-                                          float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0))
+                                          float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0),
+                                          p.get("articulo_generico"))
                     # Hook SAT igual que en el POST online (la cola trae los campos si el cliente los envió)
                     try:
                         sat_helper.guardar_partida_sat(
@@ -2136,12 +2153,14 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
                         raise Exception("Sin folio (aún no sincronizada).")
                     cursor.execute(
                         "UPDATE Partidas SET Cantidad = %s, Descripcion = %s, PrecioCompraUnitario = %s, "
-                        "Factor = %s, Proveedor = %s, TiempoEntregaDias = %s, Dolar = %s, Flete = %s "
+                        "Factor = %s, Proveedor = %s, TiempoEntregaDias = %s, Dolar = %s, Flete = %s, "
+                        "ArticuloGenerico = %s "
                         "WHERE Folio = %s AND Partida = %s",
                         (int(p.get("cantidad", 1)), (p.get("descripcion") or "").strip(),
                          float(p.get("precio_compra", 0.0)), float(p.get("factor", 0.0)),
                          (p.get("proveedor") or "").strip(), int(p.get("tiempo_entrega", 0) or 0),
                          float(p.get("dolar", 0.0) or 0.0), float(p.get("flete", 0.0) or 0.0),
+                         _clean_articulo(p.get("articulo_generico")),
                          folio, int(p.get("partida", 0))),
                     )
                     try:

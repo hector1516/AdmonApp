@@ -29,6 +29,9 @@
 	let satUnidad = $state('');
 	let satInfo = $state('');
 	let satBusy = $state(false);
+	// Artículo genérico de compras (NO es el código SAT): "controlador lógico",
+	// "disyuntor", "cable de comunicación". Va al PDF antes del SAT y la unidad.
+	let articuloGenerico = $state('');
 
 	function tieneAcceso() {
 		try {
@@ -83,6 +86,7 @@
 		satProd = '';
 		satUnidad = '';
 		satInfo = '';
+		articuloGenerico = '';
 	}
 
 	function seleccionar(p) {
@@ -98,6 +102,7 @@
 		satProd = p.sat_prod_serv || '';
 		satUnidad = p.sat_unidad || '';
 		satInfo = p.sat_fuente ? `Guardado (fuente: ${p.sat_fuente})` : '';
+		articuloGenerico = p.articulo_generico || '';
 		msg = '';
 		error = '';
 	}
@@ -113,7 +118,8 @@
 			dolar: 0,
 			flete: parseFloat(flete) || 0,
 			sat_prod_serv: satProd.trim(),
-			sat_unidad: satUnidad.trim()
+			sat_unidad: satUnidad.trim(),
+			articulo_generico: articuloGenerico.trim()
 		};
 	}
 
@@ -132,8 +138,15 @@
 			if (s) {
 				satProd = s.clave_prod_serv || '';
 				satUnidad = s.clave_unidad || '';
+				// El artículo genérico solo se rellena si está vacío: lo que ya
+				// escribió el usuario se respeta.
+				let articuloRelleno = false;
+				if (s.articulo_generico && !articuloGenerico.trim()) {
+					articuloGenerico = s.articulo_generico;
+					articuloRelleno = true;
+				}
 				const origen = { indice: 'índice local', reglas: 'reglas locales', ia: 'IA Gemini' }[s.origen] || s.fuente;
-				satInfo = `Sugerido por ${origen}${s.razon ? ` · ${s.razon}` : ''}`;
+				satInfo = `Sugerido por ${origen}${articuloRelleno ? ' (también el artículo)' : ''}${s.razon ? ` · ${s.razon}` : ''}`;
 			} else {
 				satInfo = '';
 				msg = '⚠️ Sin sugerencia (sin API key de IA o descripción muy corta). Captura los códigos manualmente.';
@@ -224,6 +237,9 @@
 								<div style="font-size: 0.75rem; color: var(--color-text-muted);">
 									${Number(p.precio_compra).toFixed(2)} × (1+{p.factor}){p.flete ? ` + flete $${Number(p.flete).toFixed(2)}` : ''}
 								</div>
+								{#if p.articulo_generico}
+									<div style="font-size: 0.7rem; color: var(--color-text-muted);">📦 {p.articulo_generico}</div>
+								{/if}
 								{#if p.sat_prod_serv}
 									<div style="font-size: 0.7rem; color: var(--color-text-muted);">
 										🧾 SAT: {p.sat_prod_serv}{p.sat_unidad ? ` · ${p.sat_unidad}` : ''}
@@ -286,6 +302,14 @@
 					<textarea id="pa-desc" class="input" rows="2" placeholder="Descripción detallada del material…" bind:value={descripcion}></textarea>
 				</div>
 
+				<div class="field">
+					<label for="pa-articulo">Artículo genérico:</label>
+					<input id="pa-articulo" class="input" maxlength="200"
+						placeholder="Ej. controlador lógico, disyuntor, cable de comunicación"
+						bind:value={articuloGenerico} />
+					<p class="hint">Cómo se llama el artículo en compras (sin marca ni modelo). Va al PDF antes del código SAT y de la unidad.</p>
+				</div>
+
 				<div class="grid-2">
 					<div class="field">
 						<label for="pa-satprod">Clave producto SAT (8 dígitos):</label>
@@ -297,7 +321,7 @@
 					</div>
 				</div>
 				<button class="btn btn-secondary btn-block" on:click={onSugerirSat} disabled={satBusy || busy || !descripcion.trim()}>
-					{satBusy ? 'Consultando…' : '🤖 Sugerir SAT por descripción'}
+					{satBusy ? 'Consultando…' : '🤖 Sugerir artículo y SAT por descripción'}
 				</button>
 				{#if satInfo}
 					<p class="hint" style="margin-top: 0.35rem;">🧾 {satInfo}</p>
