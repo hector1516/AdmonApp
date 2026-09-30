@@ -3,6 +3,32 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.4.0] - 2026-09-30
+
+### Nuevo
+- **NSS, Puesto y fotografía en los usuarios** (migración `0045`), para alimentar
+  los módulos que se van a armar después:
+  - **NSS** (número de seguro social) y **Puesto** ("Supervisor de
+    mantenimiento", "Analista"…) son columnas nuevas en `HUB_Users`, al final de
+    la tabla para no mover los índices de los SELECT existentes. El NSS se
+    normaliza a solo dígitos al guardar (así se captura con o sin guiones) y se
+    guarda como texto plano, igual que CURP/RFC.
+  - **Fotografía**: una por usuario, en la tabla nueva `HUB_UsuariosFotos`
+    (VARBINARY(MAX)) en vez de en `HUB_Users` — HUB_Users se lee en cada login
+    y en los listados de la HUB y del kiosco, y meter un binario ahí haría que
+    todas esas consultas arrastraran la imagen. Sube y se reemplaza con una
+    sola acción; 5 MB máximo; JPEG/PNG/WEBP/GIF.
+  - **En la ficha** (`UsuarioDetalle`): tarjeta con la foto (o iniciales si no
+    tiene), botón para quitarla, y campos NSS y Puesto junto a los datos.
+  - **En la lista** de Usuarios: avatar circular de cada uno, con iniciales de
+    respaldo, y el puesto bajo el correo.
+  - **Para las otras apps**: la foto se pide por HTTP con
+    `GET /api/users/<id>/foto`, y la lista `GET /api/users` ya trae `puesto` y
+    `tiene_foto`. El NSS a propósito NO va en la lista (solo en la ficha de
+    usuario): es dato personal y la lista es de lectura más amplia.
+- Migración `0045` aplicada y registrada en `ECCSA_Admon_Pruebas` y
+  producción (`ECCSA_Admon`).
+
 ## [1.3.0] - 2026-09-30
 
 ### Nuevo

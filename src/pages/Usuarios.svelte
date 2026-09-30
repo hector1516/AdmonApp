@@ -7,6 +7,33 @@
 	let usuarios = $state([]);
 	let loading = $state(true);
 	let error = $state('');
+	// 📷 Avatar por usuario: {id → blob URL}. Solo se pide la foto de quienes
+	// tienen, en paralelo, y se cachea en la sesión para no repetir la descarga
+	// cada vez que se vuelve a la lista.
+	let avatares = $state({});
+
+	function iniciales(nombre) {
+		const partes = String(nombre || '').trim().split(/\s+/).filter(Boolean);
+		if (!partes.length) return '👤';
+		return ((partes[0][0] || '') + (partes.length > 1 ? partes[partes.length - 1][0] : '')).toUpperCase();
+	}
+
+	async function cargarAvatares() {
+		await Promise.all(
+			usuarios
+				.filter((u) => u.tiene_foto && !avatares[u.id])
+				.map(async (u) => {
+					try {
+						const r = await fetch(`/api/users/${u.id}/foto`, { headers: auth.authHeader() });
+						if (!r.ok) return;
+						const blob = await r.blob();
+						avatares = { ...avatares, [u.id]: URL.createObjectURL(blob) };
+					} catch {
+						// sin conexión o sin foto: se queda el avatar de iniciales
+					}
+				})
+		);
+	}
 
 	function tieneAcceso() {
 		try {
@@ -40,6 +67,9 @@
 		} finally {
 			loading = false;
 		}
+		// Las fotos se piden después de pintar la lista: la lista aparece ya
+		// con iniciales y las fotos se van poniendo conforme llegan.
+		await cargarAvatares();
 	});
 </script>
 
@@ -64,9 +94,19 @@
 		<div class="list">
 			{#each usuarios as u (u.id)}
 				<button class="list-card" on:click={() => navigate(`/usuarios/${u.id}`)}>
-					<div>
+					<div class="avatar" class:mini={u.activo === false}>
+						{#if avatares[u.id]}
+							<img src={avatares[u.id]} alt="" />
+						{:else}
+							<span>{iniciales(u.nombre)}</span>
+						{/if}
+					</div>
+					<div style="flex: 1; min-width: 0;">
 						<div style="font-weight: 600;">{u.nombre}</div>
 						<div style="font-size: 0.8rem; color: var(--color-text-muted);">{u.email}</div>
+						{#if u.puesto}
+							<div style="font-size: 0.75rem; color: var(--color-text-muted);">💼 {u.puesto}</div>
+						{/if}
 					</div>
 					<div style="display:flex;align-items:center;gap:0.5rem;">
 						{#if u.mac_telefono}
@@ -95,4 +135,21 @@
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		letter-spacing: 0.02em;
 	}
+	/* 📷 Avatar: la foto del usuario, o sus iniciales si no tiene (o no se pudo
+	   cargar). Estilo local, no en styles/app.css (shell canónico). */
+	.avatar {
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: 999px;
+		flex-shrink: 0;
+		overflow: hidden;
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px solid rgba(255, 255, 255, 0.15);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+	.avatar.mini { opacity: 0.5; }
+	.avatar img { width: 100%; height: 100%; object-fit: cover; }
+	.avatar span { font-size: 0.85rem; font-weight: 700; color: var(--color-text-muted); }
 </style>

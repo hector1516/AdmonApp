@@ -1,5 +1,5 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
@@ -64,11 +64,22 @@
 	let nombre = $state('');
 	let email = $state('');
 	let curpRfc = $state('');
+	let nss = $state('');
+	let puesto = $state('');
 	let password = $state('');
 	let fechaIngreso = $state('');
 	let activo = $state(true);
 	let accesos = $state({});
 	let isSelf = $state(false);
+
+	// 📷 Fotografía (HUB_UsuariosFotos, tabla aparte). `fotoUrl` es un blob URL
+	// local: la foto pesa, y meterla en el <img src> como base64 atascaría la
+	// ficha; por eso se pide al backend por HTTP y serevoca al salir.
+	let fotoUrl = $state('');
+	let tieneFoto = $state(false);
+	let busyFoto = $state(false);
+	let msgFoto = $state('');
+	let errFoto = $state('');
 
 	// Teléfono / MAC: se guarda en HUB_NetworkDevices (la tabla del escáner de
 	// red 📡 que mide entradas y salidas de la oficina), vinculada por IdUsuario.
@@ -78,6 +89,84 @@
 	let busyMac = $state(false);
 	let msgMac = $state('');
 	let errMac = $state('');
+
+	// Initials para el avatar cuando no hay foto: "Héctor Peña" → "HP".
+	function iniciales(nombre) {
+		const partes = String(nombre || '').trim().split(/\s+/).filter(Boolean);
+		if (!partes.length) return '?';
+		return ((partes[0][0] || '') + (partes.length > 1 ? partes[partes.length - 1][0] : '')).toUpperCase();
+	}
+
+	async function cargarFoto() {
+		try {
+			const r = await fetch(`/api/users/${id}/foto`, { headers: auth.authHeader() });
+			if (!r.ok) { tieneFoto = false; return; }
+			const blob = await r.blob();
+			if (fotoUrl) URL.revokeObjectURL(fotoUrl);
+			fotoUrl = URL.createObjectURL(blob);
+			tieneFoto = true;
+		} catch {
+			tieneFoto = false; // sin conexión o sin foto: se muestra el avatar
+		}
+	}
+
+	async function onElegirFoto(ev) {
+		const file = ev.target.files?.[0];
+		ev.target.value = ''; // permite volver a elegir el mismo archivo
+		if (!file) return;
+		if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) {
+			errFoto = 'Usa una imagen JPEG, PNG, WEBP o GIF.';
+			return;
+		}
+		if (file.size > 5 * 1024 * 1024) {
+			errFoto = 'La foto pesa más de 5 MB. Bájala de tamaño y súbela de nuevo.';
+			return;
+		}
+		busyFoto = true;
+		errFoto = '';
+		msgFoto = '';
+		try {
+			const base64 = await new Promise((res, rej) => {
+				const fr = new FileReader();
+				fr.onload = () => res(String(fr.result));
+				fr.onerror = () => rej(new Error('No se pudo leer el archivo.'));
+				fr.readAsDataURL(file);
+			});
+			const r = await fetch(`/api/users/${id}/foto`, {
+				method: 'PUT',
+				headers: apiHeaders(),
+				body: JSON.stringify({ contenido_base64: base64, content_type: file.type })
+			});
+			const data = await r.json().catch(() => ({}));
+			if (!r.ok) throw new Error(data.detail || 'No se pudo guardar la foto.');
+			await cargarFoto();
+			msgFoto = '✅ Foto actualizada.';
+		} catch (e) {
+			errFoto = e.message || 'No se pudo guardar la foto.';
+		} finally {
+			busyFoto = false;
+		}
+	}
+
+	async function onQuitarFoto() {
+		if (!confirm('¿Quitar la foto de este usuario?')) return;
+		busyFoto = true;
+		errFoto = '';
+		msgFoto = '';
+		try {
+			const r = await fetch(`/api/users/${id}/foto`, { method: 'DELETE', headers: auth.authHeader() });
+			const data = await r.json().catch(() => ({}));
+			if (!r.ok) throw new Error(data.detail || 'No se pudo borrar la foto.');
+			if (fotoUrl) URL.revokeObjectURL(fotoUrl);
+			fotoUrl = '';
+			tieneFoto = false;
+			msgFoto = '🗑️ Foto quitada.';
+		} catch (e) {
+			errFoto = e.message || 'No se pudo borrar la foto.';
+		} finally {
+			busyFoto = false;
+		}
+	}
 
 	function fmtFecha(iso) {
 		if (!iso) return '—';
@@ -126,6 +215,8 @@
 			nombre = d.nombre || '';
 			email = d.email || '';
 			curpRfc = d.curp_rfc || '';
+			nss = d.nss || '';
+			puesto = d.puesto || '';
 			password = d.password || '';
 			fechaIngreso = d.fecha_ingreso || '';
 			activo = !!d.activo;
@@ -141,12 +232,21 @@
 			} catch (e2) {
 				console.error('Error cargando MAC:', e2);
 			}
+			// 📷 Foto del usuario (HUB_UsuariosFotos). También tolerant: si no
+			// hay foto o falla, se queda el avatar de iniciales.
+			await cargarFoto();
 		} catch (e) {
 			console.error('Error cargando usuario:', e);
 			error = e.message === 'Sesión expirada' ? e.message : `No se pudo cargar: ${e.message || 'sin detalle'}`;
 		} finally {
 			loading = false;
 		}
+	});
+
+	// Libera el blob URL de la foto al salir de la página (si no, el navegador
+	// lo mantiene hasta que se recarga entera).
+	onDestroy(() => {
+		if (fotoUrl) URL.revokeObjectURL(fotoUrl);
 	});
 
 	async function guardar() {
@@ -168,6 +268,8 @@
 					activo,
 					fecha_ingreso: fechaIngreso || null,
 					curp_rfc: curpRfc.trim(),
+					nss: nss.trim(),
+					puesto: puesto.trim(),
 					accesos
 				})
 			});
@@ -236,6 +338,44 @@
 		<div class="card"><p style="color: var(--color-danger); margin: 0;">{error}</p></div>
 	{:else}
 		<div class="card" style="margin-bottom: 0.75rem;">
+			<div class="card-title">👤 Foto</div>
+			<div style="display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;">
+				<div class="avatar" style="flex-shrink: 0;">
+					{#if fotoUrl}
+						<img src={fotoUrl} alt="Foto de {nombre}" />
+					{:else}
+						<span>{iniciales(nombre) || '👤'}</span>
+					{/if}
+				</div>
+				<div style="flex: 1; min-width: 12rem;">
+					<p class="hint" style="margin: 0 0 0.6rem;">
+						Una sola foto por usuario. Se usa en su ficha y queda disponible por API
+						(<code>GET /api/users/&lt;id&gt;/foto</code>) para las otras apps.
+					</p>
+					<input
+						id="ud-foto"
+						type="file"
+						accept="image/jpeg,image/png,image/webp,image/gif"
+						on:change={onElegirFoto}
+						disabled={busyFoto}
+					/>
+					{#if errFoto}<div class="msg err" style="margin-top: 0.5rem;">{errFoto}</div>{/if}
+					{#if msgFoto}<div class="msg ok" style="margin-top: 0.5rem;">{msgFoto}</div>{/if}
+					{#if tieneFoto}
+					<button
+						class="btn btn-secondary btn-block"
+						on:click={onQuitarFoto}
+						disabled={busyFoto}
+						style="margin-top: 0.5rem;"
+					>
+							{busyFoto ? 'Quitando…' : '🗑️ Quitar foto'}
+						</button>
+					{/if}
+				</div>
+			</div>
+		</div>
+
+		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">📝 Datos</div>
 			<div class="field">
 				<label for="ud-nombre">Nombre completo:</label>
@@ -248,6 +388,27 @@
 			<div class="field">
 				<label for="ud-curp">CURP / RFC:</label>
 				<input id="ud-curp" class="input" placeholder="Ej: PEGC850101ABC" bind:value={curpRfc} />
+			</div>
+			<div class="field">
+				<label for="ud-nss">NSS (número de seguro social):</label>
+				<input
+					id="ud-nss"
+					class="input"
+					inputmode="numeric"
+					placeholder="Ej: 12345678901 (11 dígitos)"
+					bind:value={nss}
+					on:blur={() => (nss = nss.replace(/\D/g, ''))}
+				/>
+			</div>
+			<div class="field">
+				<label for="ud-puesto">Puesto:</label>
+				<input
+					id="ud-puesto"
+					class="input"
+					placeholder="Ej: Supervisor de mantenimiento, Analista, Chofer…"
+					maxlength="120"
+					bind:value={puesto}
+				/>
 			</div>
 			<div class="field">
 				<label for="ud-pw">Contraseña:</label>
@@ -362,4 +523,19 @@
 	}
 	.tel-aqui { background: rgba(34, 197, 94, 0.14); color: #22C55E; }
 	.card { margin-bottom: 0.75rem; }
+	/* Avatar del usuario: círculo con la foto o, si no hay, con sus iniciales. */
+	.avatar {
+		width: 6rem;
+		height: 6rem;
+		border-radius: 999px;
+		overflow: hidden;
+		background: rgba(255, 255, 255, 0.08);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 2px solid var(--color-primary);
+	}
+	.avatar img { width: 100%; height: 100%; object-fit: cover; }
+	.avatar span { font-size: 1.75rem; font-weight: 700; color: var(--color-text-muted); }
+	code { font-size: 0.75rem; background: rgba(255, 255, 255, 0.08); padding: 0.1rem 0.3rem; border-radius: 4px; }
 </style>

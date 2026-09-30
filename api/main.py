@@ -5,6 +5,7 @@ from api.pdf_reporte import build_service_report_pdf
 from api.pdf_remision import build_remision_pdf
 from api.lugar import lugar_de
 from api import sat_helper
+from api import usuarios_foto as _foto_usuario
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import pymssql
@@ -111,6 +112,10 @@ class UserInfo(BaseModel):
     acceso_vales_oxxogas: bool = False
     nickname: str = ""
     mac_telefono: str = ""
+    # Puesto y si tiene foto (para la lista/avatares). El NSS NO va aquí:
+    # es dato personal y solo se entrega en la ficha del usuario.
+    puesto: str = ""
+    tiene_foto: bool = False
 
 
 # --- Auth Dependency ---
@@ -460,7 +465,7 @@ async def get_users(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios FROM HUB_Users")
+        cursor.execute("SELECT Id, Nombre, Email, AccesoInventario, AccesoNominas, AccesoCotizaciones, AccesoProveedores, AccesoOC, AccesoCalculo, AccesoTelegram, AccesoUsuarios, ISNULL(Puesto, '') FROM HUB_Users")
         rows = cursor.fetchall()
         # MAC del celular por usuario (para el badge 📡 de la lista);
         # solo activas: es lo que el escáner mide para entradas/salidas.
@@ -469,6 +474,8 @@ async def get_users(current_user: dict = Depends(get_current_user)):
             WHERE Activo = 1 AND Tipo = 'CELULAR' AND IdUsuario IS NOT NULL
         """)
         macs = {r[0]: (r[1] or "").strip() for r in cursor.fetchall()}
+        # Un solo SELECT para saber quiénes tienen foto (no se traen binarios).
+        con_foto = set(_foto_usuario.listar_fotos(get_connection))
         conn.close()
         result = []
         for row in rows:
@@ -482,6 +489,8 @@ async def get_users(current_user: dict = Depends(get_current_user)):
                 acceso_calculo=row[8] == 1,
                 acceso_usuarios=row[10] == 1,
                 mac_telefono=macs.get(row[0], ""),
+                puesto=row[11] or "",
+                tiene_foto=row[0] in con_foto,
             ))
         return result
     except Exception as e:
@@ -518,11 +527,12 @@ _USER_COLS = (
     "Notificaciones, AccesoMisVacaciones, AccesoHorasExtras, AccesoMisHorasExtras, AccesoOxxoGas, "
     "AccesoValesOxxoGas, AccesoRegistroTicketOxxoGas, AccesoEdicionBD, AccesoNominas, AccesoInventario, "
     "AccesoCalculo, AccesoProveedores, AccesoOC, AccesoAppConfig, AccesoSolicitarVales, "
-    "AccesoAdminVales, AccesoConfigOxxogas, AccesoDeteccionRed, AccesoPdfConfig"
+    "AccesoAdminVales, AccesoConfigOxxogas, AccesoDeteccionRed, AccesoPdfConfig, "
+    "NSS, Puesto"
 )
 # Orden propio (cada columna UNA vez): _user_row_to_dict usa índices fijos
 # id=0, email=1, nombre=2, password=3, activo=4, fecha_ingreso=5, curp_rfc=6,
-# accesos desde 7 en el orden de `keys`.
+# accesos desde 7 en el orden de `keys`, y al final nss=39 y puesto=40.
 
 
 def _require_admin(current_user: dict):
@@ -549,6 +559,11 @@ def _user_row_to_dict(row) -> dict:
     for i, k in enumerate(keys):
         v = row[7 + i]
         d[k] = (v == 1) if v is not None else False
+    # NSS y Puesto van al FINAL de _USER_COLS para no mover los índices de los
+    # accesos (migración 0045). Se normalizan a texto para que el front no
+    # tenga que distinguir '' de None.
+    d["nss"] = str(row[7 + len(keys)] or "").strip()
+    d["puesto"] = str(row[8 + len(keys)] or "").strip()
     return d
 
 
@@ -577,6 +592,8 @@ class UserUpdateRequest(BaseModel):
     activo: bool = True
     fecha_ingreso: Optional[str] = None
     curp_rfc: str = ""
+    nss: str = ""
+    puesto: str = ""
     accesos: Dict[str, bool] = {}
 
 
@@ -588,12 +605,15 @@ async def update_user_detail(user_id: int, body: UserUpdateRequest, current_user
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        sets = ["Nombre = %s", "Email = %s", "Password = %s", "Activo = %s", "FechaIngreso = %s", "CurpRfc = %s"]
+        sets = ["Nombre = %s", "Email = %s", "Password = %s", "Activo = %s", "FechaIngreso = %s", "CurpRfc = %s",
+                "NSS = %s", "Puesto = %s"]
         vals: list = [
             body.nombre.strip(), body.email.strip().lower(), body.password,
             1 if body.activo else 0,
             body.fecha_ingreso or None,
             (body.curp_rfc or "").strip() or None,
+            _clean_nss(body.nss),
+            (body.puesto or "").strip()[:120] or None,
         ]
         allowed = [
             "AccesoCotizaciones", "AccesoVM", "AccesoConfiguracion", "AccesoUsuarios", "AccesoReportes",
@@ -843,6 +863,72 @@ async def set_user_telefono(user_id: int, body: TelefonoMacRequest,
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
         conn.close()
+
+
+# --- NSS / Puesto / Foto del usuario ---------------------------------------
+# NSS y Puesto son columnas de HUB_Users (migración 0045) y se editan junto con
+# el resto de la ficha. La foto va en HUB_UsuariosFotos (tabla aparte, para no
+# engordar HUB_Users) con su propio par de endpoints: subir y borrar.
+
+def _clean_nss(valor) -> Optional[str]:
+    """NSS: solo dígitos. El capture también pone guiones ('123-45-6789') y a
+    veces 11 dígitos; se deja como 11 dígitos, sin guiones ni espacios, que es
+    como lo usa el imss. Vacío = NULL (no se capturó)."""
+    d = "".join(c for c in str(valor or "") if c.isdigit())
+    if not d:
+        return None
+    return d[:20]
+
+
+class FotoUsuarioRequest(BaseModel):
+    contenido_base64: str
+    content_type: str = "image/jpeg"
+
+
+@app.get("/api/users/{user_id:int}/foto")
+async def get_user_foto(user_id: int, current_user: dict = Depends(get_current_user)):
+    """Foto del usuario en binario. Devuelve 404 si no tiene foto, para que el
+    front pueda pintar un avatar con iniciales sin descargar nada."""
+    _require_admin(current_user)
+    foto = _foto_usuario.leer_foto_usuario(get_connection, user_id)
+    if not foto:
+        raise HTTPException(status_code=404, detail="Este usuario no tiene foto.")
+    return Response(content=foto["bytes"], media_type=foto["content_type"])
+
+
+@app.put("/api/users/{user_id:int}/foto")
+async def set_user_foto(user_id: int, body: FotoUsuarioRequest,
+                        current_user: dict = Depends(get_current_user)):
+    """Sube o reemplaza la foto del usuario. Llega en base64 (mismo camino que
+    la imagen de portada de la TV), no multipart, para no sumar dependencias."""
+    _require_admin(current_user)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT Id FROM HUB_Users WHERE Id = %s", (int(user_id),))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    finally:
+        conn.close()
+    try:
+        contenido = base64.b64decode(body.contenido_base64.split(",")[-1])
+    except Exception:
+        raise HTTPException(status_code=400, detail="No se pudo leer la imagen (base64 inválido).")
+    r = _foto_usuario.guardar_foto_usuario(
+        get_connection, int(user_id), contenido, body.content_type,
+        actualizado_por=int(current_user.get("id") or 0) or None)
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r.get("error") or "No se pudo guardar la foto.")
+    return r
+
+
+@app.delete("/api/users/{user_id:int}/foto")
+async def delete_user_foto(user_id: int, current_user: dict = Depends(get_current_user)):
+    _require_admin(current_user)
+    r = _foto_usuario.borrar_foto_usuario(get_connection, int(user_id))
+    if not r.get("ok"):
+        raise HTTPException(status_code=400, detail=r.get("error") or "No se pudo borrar la foto.")
+    return r
 
 
 # --- Inventory endpoints ---
