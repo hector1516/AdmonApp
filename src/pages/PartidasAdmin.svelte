@@ -147,6 +147,11 @@
 				}
 				const origen = { indice: 'índice local', reglas: 'reglas locales', ia: 'IA Gemini' }[s.origen] || s.fuente;
 				satInfo = `Sugerido por ${origen}${articuloRelleno ? ' (también el artículo)' : ''}${s.razon ? ` · ${s.razon}` : ''}`;
+				// Si no hubo artículo, se dice: mejor un aviso que un campo
+				// que "pareció" haberse llenado y sigue vacío.
+				if (!articuloRelleno && !articuloGenerico.trim()) {
+					msg = '⚠️ Se sugieren los códigos SAT, pero no el artículo genérico: escríbelo a mano (p. ej. "bloque de contactos").';
+				}
 			} else {
 				satInfo = '';
 				msg = '⚠️ Sin sugerencia (sin API key de IA o descripción muy corta). Captura los códigos manualmente.';

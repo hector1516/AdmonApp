@@ -164,6 +164,39 @@ def _sugerir_ia(descripcion: str, api_key: str, modelo: str | None):
         return None
 
 
+def _articulo_ia(descripcion: str, api_key: str, modelo: str | None) -> str:
+    """Solo el nombre genérico del artículo (1 llamada corta, sin claves SAT).
+
+    Se usa cuando los códigos ya se resolvieron (índice) pero la fila se
+    guardó antes de la migración 0044 y las reglas locales no reconocen la
+    descripción. Devuelve '' si no hay API key o falla la IA; nunca lanza."""
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name=modelo or "gemini-1.5-flash",
+            system_instruction=(
+                "Eres un comprador industrial mexicano. Escribes cómo se llama un "
+                "artículo en compras: en español, en minúsculas, de 1 a 4 palabras, "
+                "SIN marca, SIN modelo, SIN código ni número de parte. "
+                "Responde SOLO con JSON: "
+                '{"articulo_generico": "nombre generico"}.'
+            ),
+        )
+        response = model.generate_content(
+            "DESCRIPCIÓN: " + descripcion + "\n\n"
+            'Responde EXACTAMENTE este JSON sin texto adicional: '
+            '{"articulo_generico": "nombre generico"}'
+        )
+        text = (response.text or "").strip()
+        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        return " ".join(str(data.get("articulo_generico", "")).split())[:200]
+    except Exception as e:
+        print(f"[sat] Error sugiriendo artículo genérico vía IA: {e}")
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Validación de códigos capturados por el usuario
 # ---------------------------------------------------------------------------
@@ -364,14 +397,22 @@ def sugerir_para_ui(cur, descripcion):
         r = None
     if r:
         articulo = str(r[4] or "").strip()
-        # Filas guardadas antes de 0044 (sin nombre): lo da la regla local,
-        # 0 tokens, y se aprende en el índice para las próximas veces.
+        # Filas guardadas antes de la migración 0044 (o resueltas sin nombre):
+        # primero la regla local (0 tokens) y, si tampoco la hay, 1 llamada
+        # corta a Gemini SOLO por el nombre. El resultado se guarda en el
+        # índice, así que la próxima vez que salga la misma descripción sale
+        # gratis (y sin volver a llamar a la IA).
         if not articulo:
             hit = buscar_interna(descripcion)
             if hit:
                 articulo = hit[2]
-                _upsert_indice(cur, norm, descripcion, r[0], r[1], r[2], r[3],
-                               articulo_generico=articulo)
+            else:
+                api_key, modelo = _cfg_ia(cur)
+                if api_key:
+                    articulo = _articulo_ia(descripcion, api_key, modelo)
+        if articulo:
+            _upsert_indice(cur, norm, descripcion, r[0], r[1], r[2], r[3],
+                           articulo_generico=articulo)
         return {"clave_prod_serv": r[0], "clave_unidad": r[1], "fuente": r[2],
                 "razon": r[3], "origen": "indice", "articulo_generico": articulo}
     hit = buscar_interna(descripcion)

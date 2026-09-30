@@ -44,6 +44,18 @@
   `src/pages/PartidasAdmin.svelte`, `migrations/0043_*.sql`,
   `migrations/0044_*.sql`.
 
+### Fix
+- **El botón 🤖 no llenaba el artículo genérico cuando la descripción ya era
+  conocida por el índice SAT**: los códigos salían al instante (el índice las
+  tiene), pero esas filas se escribieron antes de la migración 0044 y por tanto
+  no tenían nombre genérico, y si ninguna regla local reconocía la descripción
+  el campo quedaba vacío sin aviso. Ahora, cuando el índice no tiene nombre, se
+  prueba primero la regla local (0 tokens) y si tampoco la hay se hace **una
+  llamada corta a Gemini solo por el nombre** (`_articulo_ia` en
+  `api/sat_helper.py`); el nombre se guarda en el índice, así que la siguiente
+  vez que salga esa misma descripción se resuelve en 0 tokens. En la UI, cuando
+  la sugerencia no trae artículo, se avisa que hay que escribirlo a mano.
+
 ## [1.2.0] - 2026-09-28
 
 ### Nuevo
