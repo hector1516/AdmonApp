@@ -339,15 +339,15 @@
 	{:else}
 		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">👤 Foto</div>
-			<div style="display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;">
-				<div class="avatar" style="flex-shrink: 0;">
+			<div class="foto-row">
+				<div class="avatar">
 					{#if fotoUrl}
 						<img src={fotoUrl} alt="Foto de {nombre}" />
 					{:else}
 						<span>{iniciales(nombre) || '👤'}</span>
 					{/if}
 				</div>
-				<div style="flex: 1; min-width: 12rem;">
+				<div class="foto-campo">
 					<p class="hint" style="margin: 0 0 0.6rem;">
 						Una sola foto por usuario. Se usa en su ficha y queda disponible por API
 						(<code>GET /api/users/&lt;id&gt;/foto</code>) para las otras apps.
@@ -377,46 +377,48 @@
 
 		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">📝 Datos</div>
-			<div class="field">
-				<label for="ud-nombre">Nombre completo:</label>
-				<input id="ud-nombre" class="input" bind:value={nombre} />
-			</div>
-			<div class="field">
-				<label for="ud-email">Correo electrónico:</label>
-				<input id="ud-email" type="email" class="input" bind:value={email} />
-			</div>
-			<div class="field">
-				<label for="ud-curp">CURP / RFC:</label>
-				<input id="ud-curp" class="input" placeholder="Ej: PEGC850101ABC" bind:value={curpRfc} />
-			</div>
-			<div class="field">
-				<label for="ud-nss">NSS (número de seguro social):</label>
-				<input
-					id="ud-nss"
-					class="input"
-					inputmode="numeric"
-					placeholder="Ej: 12345678901 (11 dígitos)"
-					bind:value={nss}
-					on:blur={() => (nss = nss.replace(/\D/g, ''))}
-				/>
-			</div>
-			<div class="field">
-				<label for="ud-puesto">Puesto:</label>
-				<input
-					id="ud-puesto"
-					class="input"
-					placeholder="Ej: Supervisor de mantenimiento, Analista, Chofer…"
-					maxlength="120"
-					bind:value={puesto}
-				/>
+			<div class="grid2">
+				<div class="field">
+					<label for="ud-nombre">Nombre completo:</label>
+					<input id="ud-nombre" class="input" bind:value={nombre} />
+				</div>
+				<div class="field">
+					<label for="ud-email">Correo electrónico:</label>
+					<input id="ud-email" type="email" class="input" bind:value={email} />
+				</div>
+				<div class="field">
+					<label for="ud-curp">CURP / RFC:</label>
+					<input id="ud-curp" class="input" placeholder="Ej: PEGC850101ABC" bind:value={curpRfc} />
+				</div>
+				<div class="field">
+					<label for="ud-nss">NSS (número de seguro social):</label>
+					<input
+						id="ud-nss"
+						class="input"
+						inputmode="numeric"
+						placeholder="Ej: 12345678901 (11 dígitos)"
+						bind:value={nss}
+						on:blur={() => (nss = nss.replace(/\D/g, ''))}
+					/>
+				</div>
+				<div class="field">
+					<label for="ud-puesto">Puesto:</label>
+					<input
+						id="ud-puesto"
+						class="input"
+						placeholder="Ej: Supervisor de mantenimiento, Analista, Chofer…"
+						maxlength="120"
+						bind:value={puesto}
+					/>
+				</div>
+				<div class="field">
+					<label for="ud-fecha">Fecha de ingreso:</label>
+					<input id="ud-fecha" type="date" class="input" bind:value={fechaIngreso} />
+				</div>
 			</div>
 			<div class="field">
 				<label for="ud-pw">Contraseña:</label>
 				<PasswordInput id="ud-pw" autocomplete="new-password" bind:value={password} />
-			</div>
-			<div class="field">
-				<label for="ud-fecha">Fecha de ingreso:</label>
-				<input id="ud-fecha" type="date" class="input" bind:value={fechaIngreso} />
 			</div>
 			<label class="check"><input type="checkbox" bind:checked={activo} /> Usuario activo</label>
 		</div>
@@ -474,12 +476,16 @@
 
 		<div class="card" style="margin-bottom: 0.75rem;">
 			<div class="card-title">🔑 Permisos</div>
-			{#each Object.entries(PERM_GROUPS) as [grupo, perms]}
-				<p style="font-weight: 700; font-size: 0.85rem; margin: 0.75rem 0 0.35rem;">{grupo}</p>
-				{#each perms as [key, label]}
-					<label class="check"><input type="checkbox" bind:checked={accesos[key]} /> {label}</label>
+			<div class="perm-grid">
+				{#each Object.entries(PERM_GROUPS) as [grupo, perms]}
+					<div class="perm-grupo">
+						<p class="perm-titulo">{grupo}</p>
+						{#each perms as [key, label]}
+							<label class="check"><input type="checkbox" bind:checked={accesos[key]} /> {label}</label>
+						{/each}
+					</div>
 				{/each}
-			{/each}
+			</div>
 		</div>
 
 		{#if error}
@@ -503,13 +509,13 @@
 </div>
 
 <style>
-	.card-title { font-weight: 700; font-size: 1rem; margin-bottom: 0.25rem; }
+	.card-title { font-weight: 700; font-size: 1.05rem; margin-bottom: 0.75rem; }
 	.msg { padding: 0.6rem 0.75rem; border-radius: 8px; font-size: 0.85rem; margin-bottom: 0.75rem; }
 	.msg.err { background: rgba(239,68,68,0.1); color: #EF4444; }
 	.msg.ok { background: rgba(34,197,94,0.1); color: #22C55E; }
-	.check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; margin-bottom: 0.5rem; cursor: pointer; }
-	.check input { width: 1.1rem; height: 1.1rem; }
-	.hint { font-size: 0.8rem; color: var(--color-text-muted); }
+	.check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; margin-bottom: 0.5rem; cursor: pointer; }
+	.check input { width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
+	.hint { font-size: 0.85rem; color: var(--color-text-muted); }
 	.tel-estado { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
 	.tel-chip {
 		display: inline-flex;
@@ -522,20 +528,54 @@
 		color: var(--color-text-muted);
 	}
 	.tel-aqui { background: rgba(34, 197, 94, 0.14); color: #22C55E; }
-	.card { margin-bottom: 0.75rem; }
-	/* Avatar del usuario: círculo con la foto o, si no hay, con sus iniciales. */
+
+	/* Recuadros más grandes que los .card del shell (mismo estilo, más aire
+	   adentro). Es una regla con scope de este componente, así que no toca
+	   styles/app.css ni el check del shell. */
+	.card { margin-bottom: 0.75rem; padding: 1.5rem; }
+
+	/* Dos columnas en pantallas anchas: los campos cortos caben uno junto al
+	   otro y la tarjeta no se alarga de más. */
+	.grid2 { display: grid; grid-template-columns: 1fr; gap: 0 1.25rem; }
+	@media (min-width: 760px) {
+		.grid2 { grid-template-columns: 1fr 1fr; }
+	}
+
+	/* Foto: avatar grande a la izquierda, controles a la derecha; en pantallas
+	   estrechas se apilan. */
+	.foto-row { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: wrap; }
+	.foto-campo { flex: 1; min-width: 14rem; }
 	.avatar {
-		width: 6rem;
-		height: 6rem;
+		width: 7rem;
+		height: 7rem;
 		border-radius: 999px;
+		flex-shrink: 0;
 		overflow: hidden;
 		background: rgba(255, 255, 255, 0.08);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border: 2px solid var(--color-primary);
+		border: 3px solid var(--color-primary);
 	}
 	.avatar img { width: 100%; height: 100%; object-fit: cover; }
-	.avatar span { font-size: 1.75rem; font-weight: 700; color: var(--color-text-muted); }
+	.avatar span { font-size: 2.25rem; font-weight: 700; color: var(--color-text-muted); }
+	@media (min-width: 760px) {
+		.avatar { width: 9rem; height: 9rem; }
+		.avatar span { font-size: 3rem; }
+	}
+
+	/* Permisos: un recuadro por grupo, en dos columnas cuando hay sitio. */
+	.perm-grid { display: grid; grid-template-columns: 1fr; gap: 0.5rem 1.5rem; }
+	@media (min-width: 760px) {
+		.perm-grid { grid-template-columns: 1fr 1fr; }
+	}
+	.perm-grupo {
+		background: rgba(255, 255, 255, 0.03);
+		border: 1px solid rgba(255, 255, 255, 0.06);
+		border-radius: var(--radius);
+		padding: 0.85rem 1rem;
+	}
+	.perm-titulo { font-weight: 700; font-size: 0.9rem; margin: 0 0 0.5rem; }
+
 	code { font-size: 0.75rem; background: rgba(255, 255, 255, 0.08); padding: 0.1rem 0.3rem; border-radius: 4px; }
 </style>

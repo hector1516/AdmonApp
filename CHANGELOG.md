@@ -3,6 +3,31 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.4.1] - 2026-09-30
+
+### Mejoras
+- **Módulo de Usuarios, recuadros más grandes y con todo el contenido acomodado**
+  (`src/pages/Usuarios.svelte`, `src/pages/UsuarioDetalle.svelte`):
+  - **Lista**: cada recuadro creció (más relleno, avatar de 3.75 rem que sube a
+    4.25 rem en escritorio) y el contenido ya no compite en una sola línea:
+    nombre, correo, puesto y los badges (MAC / admin) van en filas propias con
+    `flex-wrap`, así un correo o un puesto largo se parten en varias líneas en
+    vez de sacar badges fuera del recuadro.
+  - **Lista en escritorio (≥900px)**: los recuadros se muestran en dos
+    columnas (`grid`), más anchos y sin estirarse de punta a punta.
+  - **Ficha**: tarjetas con más aire (padding 1.5 rem), avatar de la foto más
+    grande (7 rem, 9 rem en pantallas anchas) y los campos de "Datos" ahora en
+    dos columnas cuando hay sitio (≥760px), con "Contraseña" y "Usuario activo"
+    abajo a todo lo ancho.
+  - **Permisos**: cada grupo (📊 Administración, 📋 Operativo…) es ahora su
+    propia tarjetita con borde, y los grupos se acomodan en dos columnas en
+    escritorio — se deja de hacer scroll interminable por una sola columna.
+  - **La foto del usuario se muestra** en su recuadro de la lista (avatar
+    circular con `object-fit: cover`) y en la ficha; mientras nadie tenga foto
+    se ven las iniciales de cada quien, y en cuanto se suba una aparece sola
+    (la lista la pide por `GET /api/users/<id>/foto` solo a los que tienen).
+
+
 ## [1.4.0] - 2026-09-30
 
 ### Nuevo

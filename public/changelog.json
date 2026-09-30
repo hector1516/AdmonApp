@@ -1,7 +1,8 @@
 {
   "app": "admon",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "cambios": [
+    "👥 Usuarios: recuadros más grandes y mejor acomodados (lista en 2 columnas, ficha con campos en 2 columnas) y con la foto del usuario visible.",
     "👤 Usuarios: nuevo NSS y Puesto, y foto por usuario (avatar en la lista, ficha y disponible por API para otras apps).",
     "🧾 Partidas de cotizaciones: nuevo campo artículo genérico (\"disyuntor\"); lo sugiere el 🤖 y el PDF lo imprime antes del código SAT y de la unidad.",
     "📺 Nueva pestaña Pantalla de la TV: control remoto del kiosco (ver/avanzar/pausar/seguir) y subida de la imagen de portada que muestra la pantalla.",

@@ -96,29 +96,31 @@
 				<button class="list-card" on:click={() => navigate(`/usuarios/${u.id}`)}>
 					<div class="avatar" class:mini={u.activo === false}>
 						{#if avatares[u.id]}
-							<img src={avatares[u.id]} alt="" />
+							<img src={avatares[u.id]} alt="Foto de {u.nombre}" />
 						{:else}
 							<span>{iniciales(u.nombre)}</span>
 						{/if}
 					</div>
-					<div style="flex: 1; min-width: 0;">
-						<div style="font-weight: 600;">{u.nombre}</div>
-						<div style="font-size: 0.8rem; color: var(--color-text-muted);">{u.email}</div>
+					<div class="info">
+						<div class="nombre">{u.nombre}</div>
+						<div class="correo">{u.email}</div>
 						{#if u.puesto}
-							<div style="font-size: 0.75rem; color: var(--color-text-muted);">💼 {u.puesto}</div>
+							<div class="puesto">💼 {u.puesto}</div>
 						{/if}
+						<!-- Los chips van en su propia fila: así el correo o un puesto largo
+						     nunca empujan ni cortan los badges fuera del recuadro. -->
+						<div class="chips">
+							{#if u.mac_telefono}
+								<span class="badge badge-mac" title="MAC del teléfono (Detección de Red 📡)">📡 {u.mac_telefono}</span>
+							{/if}
+							{#if u.acceso_usuarios}
+								<span class="badge badge-warning">admin</span>
+							{:else}
+								<span class="badge badge-info">usuario</span>
+							{/if}
+						</div>
 					</div>
-					<div style="display:flex;align-items:center;gap:0.5rem;">
-						{#if u.mac_telefono}
-							<span class="badge badge-mac" title="MAC del teléfono (Detección de Red 📡)">📡 {u.mac_telefono}</span>
-						{/if}
-						{#if u.acceso_usuarios}
-							<span class="badge badge-warning">admin</span>
-						{:else}
-							<span class="badge badge-info">usuario</span>
-						{/if}
-						<span style="color: var(--color-text-muted);">›</span>
-					</div>
+					<span class="flecha">›</span>
 				</button>
 			{/each}
 		</div>
@@ -135,21 +137,74 @@
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		letter-spacing: 0.02em;
 	}
-	/* 📷 Avatar: la foto del usuario, o sus iniciales si no tiene (o no se pudo
-	   cargar). Estilo local, no en styles/app.css (shell canónico). */
+
+	/* Recuadros de la lista: más grandes que el .list-card del shell, con la
+	   foto grande a la izquierda y el texto en varias filas para que TODO
+	   quepa (correo y puesto largos no aprietan los badges). */
+	.list-card {
+		align-items: center;
+		gap: 0.9rem;
+		padding: 1.05rem 1.2rem;
+	}
+	.info { flex: 1; min-width: 0; }
+	.nombre {
+		font-weight: 700;
+		font-size: 1.05rem;
+		line-height: 1.3;
+		overflow-wrap: anywhere;
+	}
+	.correo {
+		font-size: 0.85rem;
+		color: var(--color-text-muted);
+		overflow-wrap: anywhere;
+	}
+	.puesto {
+		font-size: 0.85rem;
+		color: var(--color-text-muted);
+		margin-top: 0.1rem;
+		overflow-wrap: anywhere;
+	}
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem;
+		margin-top: 0.55rem;
+	}
+	.flecha {
+		flex-shrink: 0;
+		font-size: 1.4rem;
+		color: var(--color-text-muted);
+	}
+
+	/* 📷 Avatar: la foto del usuario (cuando la tenga), o sus iniciales si no
+	   tiene o no se pudo cargar. Estilo local, no en styles/app.css (shell
+	   canónico). */
 	.avatar {
-		width: 2.5rem;
-		height: 2.5rem;
+		width: 3.75rem;
+		height: 3.75rem;
 		border-radius: 999px;
 		flex-shrink: 0;
 		overflow: hidden;
 		background: rgba(255, 255, 255, 0.08);
-		border: 1px solid rgba(255, 255, 255, 0.15);
+		border: 2px solid rgba(255, 255, 255, 0.15);
 		display: flex;
 		align-items: center;
 		justify-content: center;
 	}
 	.avatar.mini { opacity: 0.5; }
 	.avatar img { width: 100%; height: 100%; object-fit: cover; }
-	.avatar span { font-size: 0.85rem; font-weight: 700; color: var(--color-text-muted); }
+	.avatar span { font-size: 1.2rem; font-weight: 700; color: var(--color-text-muted); }
+
+	/* En escritorio los recuadros se ven en dos columnas: más anchos y sin
+	   estirarse a lo ancho de la pantalla entera. */
+	@media (min-width: 900px) {
+		.list {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 1rem;
+		}
+		.list-card { padding: 1.2rem 1.35rem; }
+		.avatar { width: 4.25rem; height: 4.25rem; }
+	}
 </style>
