@@ -30,7 +30,8 @@
     toca).
 - Se vuelve a agregar **openpyxl** a `requirements.txt` (lo había quitado el
   escaneo del 2026-09-27) y el `Dockerfile` ahora copia el template del
-  formato al contenedor — por eso este despliegue reconstruye la imagen.
+  formato al contenedor (sintaxis JSON: la forma con comillas la rechaza el
+  BuildKit del ServerVM) — por eso este despliegue reconstruye la imagen.
 
 ## [1.4.1] - 2026-09-30
 

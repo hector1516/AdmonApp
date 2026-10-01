@@ -24,7 +24,10 @@ COPY ECCSA_SHELL_VERSION ./ECCSA_SHELL_VERSION
 COPY eccsa_logo.png ./eccsa_logo.png
 # Template del formato de Excel (hoja "Calculo") que llena el endpoint
 # /api/reportes/excel. Destino sin espacios para simplificar la ruta en Python.
-COPY "formatos excel/Formato Cotizaciones.xlsx" ./formatos_excel/FormatoCotizaciones.xlsx
+# OJO: la forma JSON es la que SÍ funciona aquí — la forma con comillas
+# (`COPY "formatos excel/…" …`) la rechaza el BuildKit del ServerVM con
+# `failed to process "\"formatos"` (falló el deploy 2026-10-01).
+COPY ["formatos excel/Formato Cotizaciones.xlsx", "./formatos_excel/FormatoCotizaciones.xlsx"]
 
 EXPOSE 8000
 
