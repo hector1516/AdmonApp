@@ -2499,7 +2499,7 @@ async def api_reportes_excel(ids: str, current_user: dict = Depends(get_current_
                    FechaHoraInicio, FechaHoraFin, TiempoTraslado, Estatus, Eliminado
             FROM ReportesServicio
             WHERE IdReporte IN ({placeholders})
-        """, lista_ids)
+        """, tuple(lista_ids))  # tuple: pymssql 2.2.11 (producción) rechaza list
         rows = [dict(zip([c[0] for c in cursor.description], r)) for r in cursor.fetchall()]
         conn.close()
     except HTTPException:
