@@ -951,6 +951,24 @@ async def delete_user_foto(user_id: int, current_user: dict = Depends(get_curren
 # una salida que todavía no pasa.
 AJUSTE_ENTRADA_MIN = 4  # ver el docstring de asistencia_hoy() en dashboard/api/datos.py
 
+# Minutos que puede pasar el escáner sin reportar nada antes de que la pantalla
+# deje de dar por buenos los datos. El escáner corre cada minuto y su detector
+# tiene 5 min de tolerancia, así que 10 min ya no es "un ratito sin cambios":
+# es que nadie está escribiendo. Sin este aviso, un escáner caído deja la
+# pantalla lanzando "9 en sitio" con datos de hace horas: la última cosa que se
+# sabe de cada quien es que entró, y nunca se registró su salida.
+VENTANA_SIN_ESCANER_MIN = 10
+
+# Marcha simultánea: cuántas personas tienen que registrar el mismo tipo de
+# evento (entradas o salidas) dentro del MISMO minuto para que el dato se tome
+# por escrito. Tres personas no entran ni salen de la oficina en el mismo
+# segundo, así que ese patrón es del proceso, no de la gente: pasa cuando el
+# escáner (o el worker que lee los ciclos) se reinicia y escribe de golpe el
+# estado que tenía guardado, o cuando la red de la oficina se cae un momento y
+# todos los equipos "desaparecen" juntos. Sin esta guarda, ese reinicio deja
+# toda la pantalla en verde aunque la oficina esté vacía.
+MARCHA_SIMULTANEA_MIN = 3
+
 
 @app.get("/api/asistencia")
 async def get_asistencia(current_user: dict = Depends(get_current_user)):
@@ -965,7 +983,11 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
     """
     if not current_user.get("acceso_usuarios"):
         raise HTTPException(status_code=403, detail="No access")
-    conn = None
+    # UNA sola conexión para todo el endpoint. Antes cada bloque abría la suya
+    # (la principal, la de fotos, la de frescura y la de la marcha): cuatro
+    # conexiones al SQL Server en una sola llamada, que en la oficina se
+    #-notaban como lentitud. Con una conexión el endpoint no depende de
+    # cuántos clientes estén pegados a la pantalla al mismo tiempo.
     try:
         conn = get_connection()
         cursor = conn.cursor(as_dict=True)
@@ -1009,65 +1031,134 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
             ORDER BY entrada
         """, (AJUSTE_ENTRADA_MIN, AJUSTE_ENTRADA_MIN))
         filas = cursor.fetchall()
+
+        # Un SELECT aparte para saber quiénes tienen foto (no se traen binarios).
+        # Es la misma lista que devuelve usuarios_foto.listar_fotos(), pero por
+        # la misma conexión: ese helper abre (y cierra) la suya.
+        cursor_foto = conn.cursor()
+        cursor_foto.execute("SELECT IdUsuario FROM HUB_UsuariosFotos")
+        con_foto = {int(r[0]) for r in cursor_foto.fetchall()}
+
+        def _txt(fecha):
+            return fecha.strftime("%Y-%m-%d %H:%M") if fecha else ""
+
+        personas = []
+        for f in filas:
+            entrada_cruda = f.get("entrada_cruda")
+            ultima_entrada = f.get("ultima_entrada")
+            ultima_salida = f.get("salida")
+            # OJO: las comparaciones van ANTES de convertir a texto. Al revés
+            # revienta con "'>' not supported between datetime and str".
+            en_sitio = bool(f.get("en_sitio"))
+
+            # Si sigue dentro, la hora de SALIDA es la de una visita anterior y no la
+            # de hoy: mostrarla junto a "en la oficina" se contradice ("se fue 17:36"
+            # y está aquí a las 18:10, porque salió y volvió). Se vacía y, si entró
+            # otra vez, se anota el reingreso.
+            reingreso = ""
+            if en_sitio:
+                if ultima_entrada and ultima_salida and ultima_entrada > entrada_cruda:
+                    reingreso = _txt(ultima_entrada)
+                salida_txt = ""
+            else:
+                salida_txt = _txt(ultima_salida)
+
+            # Caso límite: si al restar los 4 minutos la entrada queda DESPUÉS de la
+            # salida se vería "llegó 08:05 / se fue 08:02", que es imposible y hace
+            # dudar de toda la pantalla. Se queda la hora cruda (sin ajustar).
+            entrada_mostrar = f.get("entrada")
+            if not en_sitio and ultima_salida and entrada_mostrar and entrada_mostrar > ultima_salida:
+                entrada_mostrar = entrada_cruda
+
+            personas.append({
+                "id_usuario": int(f["id_usuario"]),
+                "nombre": f.get("nombre") or "(sin usuario)",
+                "entrada": _txt(entrada_mostrar),
+                "salida": salida_txt,
+                "reingreso": reingreso,
+                "eventos": int(f.get("eventos") or 0),
+                "en_sitio": en_sitio,
+                "tiene_foto": int(f["id_usuario"]) in con_foto,
+            })
+
+        dentro = sum(1 for p in personas if p["en_sitio"])
+
+        # ── Qué tan frescos son los datos ─────────────────────────────────────
+        # `en_sitio` se decide con el último evento de cada quien, así que si el
+        # escáner lleva un rato sin escribir, ese "último evento" es viejo y la
+        # pantalla estaría afirmando que todos siguen ahí con información de hace
+        # horas. Se mide la edad del dato más reciente del día y se devuelve junto
+        # con un estado, para que el front pueda avisar en vez de mentir.
+        cursor2 = conn.cursor()
+        cursor2.execute("""
+            SELECT MAX(FechaHora) AS ultimo, DATEDIFF(MINUTE, MAX(FechaHora), GETDATE()) AS minutos
+            FROM HUB_NetworkPresence
+            WHERE FechaHora >= CAST(CAST(GETDATE() AS date) AS datetime)
+        """)
+        fila = cursor2.fetchone()
+        ultimo_evento, minutos = fila[0], int(fila[1] or 0)
+        cursor2.close()
+
+        if ultimo_evento is None:
+            # Hoy todavía no hay ningún movimiento: no es que los datos estén
+            # congelados, es que el día del servidor todavía no empezó a llenarse.
+            estado = "sin_datos"
+        elif minutos < 0:
+            # Hay movimientos con fecha futura: los relojes no coinciden (o se
+            # escribió con una hora equivocada). Tampoco se puede afirmar nada.
+            estado = "futuro"
+        elif minutos > VENTANA_SIN_ESCANER_MIN:
+            estado = "congelado"
+        else:
+            estado = "ok"
+
+        # ¿El evento más reciente fue una marcha simultánea? Si sí, el estado de
+        # "en sitio" que se acaba de calcular viene de esa marcha y no de la
+        # realidad de la oficina (ver MARCHA_SIMULTANEA_MIN). Se marca y la vista
+        # deja de pintar el estado, igual que con los datos congelados.
+        marcha = None
+        if estado == "ok":
+            cursor3 = conn.cursor(as_dict=True)
+            cursor3.execute("""
+                SELECT MIN(p.FechaHora) AS desde, MAX(p.FechaHora) AS hasta,
+                       p.TipoEvento, COUNT(DISTINCT d.IdUsuario) AS personas
+                FROM HUB_NetworkPresence p
+                JOIN HUB_NetworkDevices d ON d.Id = p.IdDispositivo
+                WHERE p.FechaHora >= DATEADD(minute, -%d, GETDATE())
+                GROUP BY p.TipoEvento,
+                         DATEPART(hour, p.FechaHora), DATEPART(minute, p.FechaHora)
+                HAVING COUNT(DISTINCT d.IdUsuario) >= %d
+                ORDER BY MAX(p.FechaHora) DESC
+            """, (VENTANA_SIN_ESCANER_MIN, MARCHA_SIMULTANEA_MIN))
+            fila = cursor3.fetchone()
+            cursor3.close()
+            if fila:
+                estado = "inestable"
+                marcha = {
+                    "tipo": fila["TipoEvento"],
+                    "personas": int(fila["personas"]),
+                    "desde": fila["desde"].strftime("%H:%M:%S") if fila["desde"] else "",
+                    "hasta": fila["hasta"].strftime("%H:%M:%S") if fila["hasta"] else "",
+                }
+
+        return {
+            "personas": personas,
+            "total": len(personas),
+            "dentro": dentro,
+            "salieron": len(personas) - dentro,
+            "actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ultimo_evento": ultimo_evento.strftime("%Y-%m-%d %H:%M") if ultimo_evento else "",
+            "minutos_sin_actualizar": minutos,
+            "estado": estado,
+            "marcha": marcha,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
     finally:
+        # La conexión se cierra aquí, ya con el último SELECT hecho: todas las
+        # consultas de arriba (personas, fotos, frescura y marcha) salen de ella.
         if conn is not None:
             conn.close()
-
-    # Un SELECT aparte para saber quiénes tienen foto (no se traen binarios).
-    con_foto = set(_foto_usuario.listar_fotos(get_connection))
-
-    def _txt(fecha):
-        return fecha.strftime("%Y-%m-%d %H:%M") if fecha else ""
-
-    personas = []
-    for f in filas:
-        entrada_cruda = f.get("entrada_cruda")
-        ultima_entrada = f.get("ultima_entrada")
-        ultima_salida = f.get("salida")
-        # OJO: las comparaciones van ANTES de convertir a texto. Al revés
-        # revienta con "'>' not supported between datetime and str".
-        en_sitio = bool(f.get("en_sitio"))
-
-        # Si sigue dentro, la hora de SALIDA es la de una visita anterior y no la
-        # de hoy: mostrarla junto a "en la oficina" se contradice ("se fue 17:36"
-        # y está aquí a las 18:10, porque salió y volvió). Se vacía y, si entró
-        # otra vez, se anota el reingreso.
-        reingreso = ""
-        if en_sitio:
-            if ultima_entrada and ultima_salida and ultima_entrada > entrada_cruda:
-                reingreso = _txt(ultima_entrada)
-            salida_txt = ""
-        else:
-            salida_txt = _txt(ultima_salida)
-
-        # Caso límite: si al restar los 4 minutos la entrada queda DESPUÉS de la
-        # salida se vería "llegó 08:05 / se fue 08:02", que es imposible y hace
-        # dudar de toda la pantalla. Se queda la hora cruda (sin ajustar).
-        entrada_mostrar = f.get("entrada")
-        if not en_sitio and ultima_salida and entrada_mostrar and entrada_mostrar > ultima_salida:
-            entrada_mostrar = entrada_cruda
-
-        personas.append({
-            "id_usuario": int(f["id_usuario"]),
-            "nombre": f.get("nombre") or "(sin usuario)",
-            "entrada": _txt(entrada_mostrar),
-            "salida": salida_txt,
-            "reingreso": reingreso,
-            "eventos": int(f.get("eventos") or 0),
-            "en_sitio": en_sitio,
-            "tiene_foto": int(f["id_usuario"]) in con_foto,
-        })
-
-    dentro = sum(1 for p in personas if p["en_sitio"])
-    return {
-        "personas": personas,
-        "total": len(personas),
-        "dentro": dentro,
-        "salieron": len(personas) - dentro,
-        "actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
 
 
 # --- Inventory endpoints ---

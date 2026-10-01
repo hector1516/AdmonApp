@@ -3,6 +3,36 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.6.1] - 2026-10-01
+
+### Corregido
+- **La asistencia ya no marca "en sitio" cuando el escáner de red no está
+  reportando.** El 30 de septiembre el escáner dejó de escribir a las 15:56 y,
+  como nadie llegó a registrar su salida, la pantalla lanzaba "9 en sitio"
+  con datos de hace horas: la última cosa que se sabía de cada quien era que
+  habían entrado. Ahora:
+  - El backend mide la edad del dato más reciente (`ultimo_evento`,
+    `minutos_sin_actualizar`, `estado`) y la vista avisa cuando pasa de 10 min
+    sin reportar (el escáner corre cada minuto con 5 min de tolerancia).
+  - Con datos congelados sale un aviso ámbar arriba, las tarjetas pierden el
+    color de estado (nada de "verde = en la oficina" sin saberlo) y las
+    métricas se marcan "(¿?)". **Las horas de llegada y salida se conservan**:
+    ésas no envejecen.
+  - La barra deja de prometer el refresco automático y pasa a decir de cuándo
+    es el último dato.
+- **La asistencia tampoco se pinta cuando el detector escribe todos de un
+  jalón.** Al reiniciarse el escáner (o caerse la red un momento) se registra
+  una `SALIDA` y una `ENTRADA` para todo el mundo en el mismo segundo, y eso
+  volvía a dejar la pantalla completa en verde con la oficina vacía. Ahora, si
+  3 o más personas registran el mismo tipo de evento en el mismo minuto, la
+  vista avisa que el detector cambió el estado de todos de un jalón y tampoco
+  pinta el estado.
+- **Relojes desfasados**: si algún movimiento trae fecha futura, la pantalla lo
+  avisa en vez de darlo por bueno.
+- **El endpoint abre una sola conexión** al SQL Server (antes cuatro: personas,
+  fotos, frescura y marcha). Con varias personas mirando la pantalla a la vez se
+  notaba: la respuesta pasó de segundos a ~30 ms.
+
 ## [1.6.0] - 2026-10-01
 
 ### Nuevo

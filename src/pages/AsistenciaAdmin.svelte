@@ -24,7 +24,8 @@
 	// cada 2 min; acá basta un minuto y no depende de ningún otro proceso.
 	const AUTO_MS = 60_000;
 
-	let datos = $state({ personas: [], total: 0, dentro: 0, salieron: 0, actualizado: '' });
+	let datos = $state({ personas: [], total: 0, dentro: 0, salieron: 0, actualizado: '',
+		estado: 'sin_datos', ultimo_evento: '', minutos_sin_actualizar: 0, marcha: null });
 	let loading = $state(true);
 	let error = $state('');
 	// 📷 Avatar por usuario: {id → blob URL}. Igual que en la lista de
@@ -34,6 +35,27 @@
 
 	let timer = null;
 	let enVuelo = false;
+
+	/*
+		`en_sitio` sale del ÚLTIMO evento de cada quien, así que depende de que el
+		escáner esté escribiendo y de que lo que escribe sea real. Si lo uno o lo
+		otro falla, la pantalla estaría diciendo "sigue en la oficina" con
+		información que no la sostiene (lo que pasó el 30 de septiembre: el
+		escáner se cayó a las 15:56, nadie registró su salida y todos aparecían
+		en verde toda la noche). Con datos congelados o con una marcha simultánea
+		NO se pinta el estado: se avisa que no se sabe.
+	*/
+	const congelado = $derived(datos.estado === 'congelado');
+	const inestable = $derived(datos.estado === 'inestable');
+	const futuro = $derived(datos.estado === 'futuro');
+	const sinEstado = $derived(congelado || inestable || futuro);
+
+	/** "7 h 12 min" a partir de los minutos, para el aviso de datos viejos. */
+	function antiguedad(min) {
+		const m = Math.max(0, Math.floor(min || 0));
+		const h = Math.floor(m / 60);
+		return h ? `${h} h ${m % 60} min` : `${m} min`;
+	}
 
 	function hhmm(iso) {
 		if (!iso) return '';
@@ -121,7 +143,9 @@
 <!-- Barra: refresco a la mano + de cuándo son los datos que se ven. -->
 <div class="embed-bar">
 	<span class="actualizado">
-		{#if datos.actualizado}
+		{#if sinEstado}
+			Último dato del escáner: <b>{datos.ultimo_evento?.slice(11)}</b>
+		{:else if datos.actualizado}
 			Actualizado <b>{datos.actualizado.slice(11)}</b> · se refresca solo cada minuto
 		{/if}
 	</span>
@@ -130,23 +154,70 @@
 	</button>
 </div>
 
+<!--
+	Datos que no sostienen el estado. En los dos casos lo que se ve abajo es real
+	(las horas de llegada y salida no envejecen ni se inventan), pero el "sigue
+	en la oficina / ya se fue" no se puede afirmar, así que no se pinta de verde
+	ni de rojo. El aviso va arriba de todo porque lo que falta es información.
+-->
+{#if congelado}
+	<div class="alerta">
+		<span class="alerta-ic">⚠️</span>
+		<span>
+			<b>El escáner de red no reporta desde hace {antiguedad(datos.minutos_sin_actualizar)}</b>
+			(último evento {datos.ultimo_evento}). No se sabe quién sigue en la oficina: abajo
+			se ve cuándo entró y salió cada quien la última vez que se registró, pero el
+			estado de "en sitio / fuera" no es confiable. Hay que revisar el escáner.
+		</span>
+	</div>
+{:else if inestable}
+	<div class="alerta">
+		<span class="alerta-ic">⚠️</span>
+		<span>
+			<b>El detector cambió el estado de {datos.marcha?.personas} personas de un jalón</b>
+			({datos.marcha?.tipo === 'SALIDA' ? 'salidas' : 'entradas'} entre las
+			{datos.marcha?.desde} y las {datos.marcha?.hasta}). Eso no son movimientos reales:
+			pasa cuando el escáner se reinicia o se cae la red un momento. Se espera a que
+			se estabilice para volver a pintar quién está aquí.
+		</span>
+	</div>
+{:else if futuro}
+	<div class="alerta">
+		<span class="alerta-ic">⚠️</span>
+		<span>
+			<b>Hay registros con fecha que todavía no llega</b> (el último dice
+			{datos.ultimo_evento?.slice(11)}, y ahora mismo es más tarde en el reloj del
+			servidor). Los relojes no coinciden, así que las horas de arriba no son de
+			fiar hasta que se revise el detector.
+		</span>
+	</div>
+{/if}
+
 {#if loading}
 	<div class="empty">Cargando asistencia…</div>
 {:else if error}
 	<div class="card"><p class="err">{error}</p></div>
+{:else if datos.estado === 'sin_datos'}
+	<div class="empty">
+		Todavía no hay ningún registro de hoy.
+		<span class="vacio-sub">
+			Aquí aparece cada persona en cuanto su equipo o celular conocido se
+			conecta a la red de la oficina.
+		</span>
+	</div>
 {:else}
 	<!-- Métricas: cuántas se registraron hoy y cómo están ahora. -->
-	<div class="metricas">
+	<div class="metricas" class:neutral={sinEstado}>
 		<div class="metrica">
 			<span class="rot">Registradas</span>
 			<span class="num">{dosDigitos(datos.total)}</span>
 		</div>
 		<div class="metrica sitio">
-			<span class="rot">🟢 En sitio</span>
+			<span class="rot">🟢 En sitio{sinEstado ? ' (¿?)' : ''}</span>
 			<span class="num">{dosDigitos(datos.dentro)}</span>
 		</div>
 		<div class="metrica fuera">
-			<span class="rot">🔴 Fuera</span>
+			<span class="rot">🔴 Fuera{sinEstado ? ' (¿?)' : ''}</span>
 			<span class="num">{dosDigitos(datos.salieron)}</span>
 		</div>
 	</div>
@@ -160,7 +231,7 @@
 			</span>
 		</div>
 	{:else}
-		<div class="rejilla">
+		<div class="rejilla" class:neutral={sinEstado}>
 			{#each conRegistro as p (p.id_usuario)}
 				<article class="tarjeta" class:sitio={p.en_sitio} class:fuera={!p.en_sitio}>
 					<div class="cabeza">
@@ -291,6 +362,41 @@
 		background: linear-gradient(100deg, rgba(239, 68, 68, 0.22) 0%, rgba(185, 28, 28, 0.07) 100%);
 		border: 1px solid rgba(248, 113, 113, 0.45);
 	}
+
+	/*
+		Datos que no sostienen el estado (escáner congelado, marcha simultánea o
+	reloj desfasado): se
+	cae el color de estado. Poner
+		"verde = en la oficina" cuando no se sabe es justamente el error que hizo
+		esta pantalla. Las horas se conservan porque ésas no envejecen: "llegó
+		08:22" sigue siendo cierto aunque el dato sea de hace horas.
+	*/
+	.rejilla.neutral .tarjeta {
+		background: rgba(255, 255, 255, 0.03);
+		border: 1px dashed rgba(148, 163, 184, 0.35);
+	}
+	.metricas.neutral .metrica.sitio,
+	.metricas.neutral .metrica.fuera { border-color: rgba(148, 163, 184, 0.3); }
+	.metricas.neutral .metrica.sitio .num,
+	.metricas.neutral .metrica.fuera .num { color: var(--color-text-muted); }
+
+	/* Aviso de datos congelados: va arriba de todo, en rojo/ámbar, porque lo
+	   que falta es información y no un detalle. */
+	.alerta {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.6rem;
+		margin-bottom: 0.85rem;
+		padding: 0.7rem 0.9rem;
+		border-radius: 12px;
+		background: rgba(245, 158, 11, 0.12);
+		border: 1px solid rgba(245, 158, 11, 0.45);
+		font-size: 0.83rem;
+		line-height: 1.45;
+		color: #fcd34d;
+	}
+	.alerta b { color: #fde68a; }
+	.alerta-ic { flex-shrink: 0; }
 
 	.cabeza { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
 	.datos { flex: 1; min-width: 0; }

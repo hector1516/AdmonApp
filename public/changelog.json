@@ -1,7 +1,8 @@
 {
   "app": "admon",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "cambios": [
+    "🕘 Asistencia: si el escáner no reporta o el detector cambia el estado de todos de un jalón, la pantalla avisa y deja de pintar “en sitio”.",
     "⚙️ Administración: el módulo de usuarios ahora tiene pestañas: 🕘 Asistencia (quién llegó, sigue aquí o ya se fue; refresco cada minuto) y 👥 Administración.",
     "📊 Registro de Reportes: nueva pestaña Excel para exportar reportes firmados del mismo cliente al formato de cotizaciones (folio, horas y descripción).",
     "👥 Usuarios: recuadros más grandes y mejor acomodados (lista en 2 columnas, ficha con campos en 2 columnas) y con la foto del usuario visible.",
