@@ -20,8 +20,8 @@
 	import CotizacionPdf from './pages/CotizacionPdf.svelte';
 	import CotizacionEnviar from './pages/CotizacionEnviar.svelte';
 	import CotizacionEstatus from './pages/CotizacionEstatus.svelte';
-	import Usuarios from './pages/Usuarios.svelte';
 	import UsuarioDetalle from './pages/UsuarioDetalle.svelte';
+	import Admin from './pages/Admin.svelte';
 	import Clientes from './pages/Clientes.svelte';
 	import ClienteDetalle from './pages/ClienteDetalle.svelte';
 	import RegistroReportes from './pages/RegistroReportes.svelte';
@@ -159,8 +159,17 @@
 				<CotizacionEstatus clave={$path.split('/')[2]} />
 			{:else if $path.startsWith('/cotizaciones/')}
 				<CotizacionDetalle clave={$path.split('/')[2]} />
+{:else if $path === '/admin'}
+			<!-- Módulo Administración: pestañas 🕘 Asistencia + 👥 Administración.
+			     /admin abre en Asistencia (la de uso diario). -->
+			<Admin />
+			{:else if $path === '/admin/usuarios'}
+				<Admin initialTab="usuarios" />
 			{:else if $path === '/usuarios'}
-				<Usuarios />
+				<!-- Ruta vieja del módulo de usuarios (la que usan el botón
+				     "Volver" de cada ficha y los enlaces ya publicados): ahora abre
+				     la pestaña 👥 Administración del módulo. -->
+				<Admin initialTab="usuarios" />
 			{:else if $path.startsWith('/usuarios/')}
 				<UsuarioDetalle id={$path.split('/')[2]} />
 			{:else if $path === '/ia'}

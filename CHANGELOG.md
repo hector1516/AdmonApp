@@ -3,6 +3,45 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.6.0] - 2026-10-01
+
+### Nuevo
+- **El módulo de usuarios ahora es el módulo ⚙️ Administración, con pestañas**:
+  la tarjeta del menú se llama **Administración** (antes *Administrador de
+  Usuarios*) y dentro hay dos secciones:
+  - **🕘 Asistencia** (la primera, y la que abre por default): quién llegó,
+    quién sigue en la oficina y quién ya se fue **hoy**, con la misma
+    información que muestra la pantalla *Asistencia de hoy* del Dashboard de
+    la oficina. Arriba van las tres métricas (registradas / 🟢 en sitio / 🔴
+    fuera) y luego una tarjeta por persona: foto (o iniciales), **Llegó**
+    HH:MM y **Se fue** HH:MM sólo si ya salió. Los que siguen aquí van con
+    tarjeta verde, los que ya se fueron en rojo. Cuando alguien salió y volvió
+    se anota **↩️ volvió HH:MM** (la salida no se muestra porque ya no aplica).
+    Se refresca **solo cada minuto** mientras la pestaña está a la vista, con
+    botón **🔄 Actualizar** y la hora del último refresco a la vista.
+  - **👥 Administración** (la segunda): la lista de usuarios que ya existía,
+    tal cual (fotos, puesto, MAC del teléfono y acceso).
+  - Cada pestaña es una ruta real: `/admin` (Asistencia) y `/admin/usuarios`
+    (Administración), así el enlace se puede compartir y el ⬅️ del navegador
+    retrocede. **La ruta vieja `/usuarios` sigue funcionando** y abre
+    directo en la pestaña de Administración, que es adonde apuntan el botón
+    "Volver" de cada ficha y los enlaces ya publicados.
+- **Endpoint `GET /api/asistencia`**: calcula la asistencia del día leyendo
+  `HUB_NetworkPresence` (la que escribe el `network_scanner_worker` cuando ve
+  aparecer o desaparecer una MAC conocida). Toma la **primera entrada** y la
+  **última salida** de cada persona, con el mismo ajuste de 4 min que usa el
+  kiosco, y todo en **un solo SELECT** (el "último evento" se resuelve con
+  `OUTER APPLY` en vez de una consulta por persona).
+  Los horarios salen como `YYYY-MM-DD HH:MM` y cada persona trae `tiene_foto`,
+  para que la vista pida la foto sólo de quienes la tienen (igual que la
+  lista de usuarios).
+  Los resultados se contrastaron contra el snapshot del kiosco: **idénticos**
+  (mismas personas, mismas horas de llegada/salida y mismos estados).
+
+### Corregido
+- `admin` se agrega a las rutas de la SPA del backend: sin eso, abrir
+  `/admin` directo (recargando o por enlace) devolvía 404 en vez de la app.
+
 ## [1.5.0] - 2026-10-01
 
 ### Nuevo

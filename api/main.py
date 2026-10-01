@@ -931,6 +931,145 @@ async def delete_user_foto(user_id: int, current_user: dict = Depends(get_curren
     return r
 
 
+# --- Asistencia del día -----------------------------------------------------
+# Quién entró y quién salió HOY. Es la misma información que muestra la pantalla
+# "🕘 Asistencia de hoy" del kiosco Dashboard (app en :8101), pero leída por
+# Admon DIRECTAMENTE de la base: el kiosco va por un snapshot en disco que otro
+# worker refresca cada 2 min, y acá se calcula al momento, sin depender de que
+# ese proceso esté arriba.
+#
+# La fuente es `HUB_NetworkPresence`, que escribe el `network_scanner_worker`
+# del contenedor `workersadmon` cuando ve aparecer o desaparecer una MAC conocida
+# en la red. OJO: hay otras dos tablas de asistencia y NINGUNA sirve para esto
+# hoy — `ControlAsistencia` (la del checador viejo) tiene su último registro de
+# enero de 2023 y está abandonada, y `HUB_AsistenciaDiaria` sólo se calculó a
+# mano una vez (2026-09-11) y trae casi todo en NULL.
+#
+# Por persona se toma la PRIMERA entrada del día y la ÚLTIMA salida: un celular
+# que entra y sale seis veces no debe verse como seis llegadas distintas. Quien
+# sigue dentro (su último evento es ENTRADA) va con `en_sitio`, para no pintar
+# una salida que todavía no pasa.
+AJUSTE_ENTRADA_MIN = 4  # ver el docstring de asistencia_hoy() en dashboard/api/datos.py
+
+
+@app.get("/api/asistencia")
+async def get_asistencia(current_user: dict = Depends(get_current_user)):
+    """Asistencia de hoy: quién llegó, quién sigue aquí y quién ya se fue.
+
+    Devuelve {personas: [...], total, dentro, salieron, actualizado}. Cada
+    persona trae los horarios como texto "YYYY-MM-DD HH:MM" (el formato que ya
+    usa el kiosco, para que el front los formatee igual con hhmm()).
+
+    `tiene_foto` viene aparte (no el binario): el front pide la foto sólo de
+    quienes la tienen, por /api/users/{id}/foto, como en la lista de usuarios.
+    """
+    if not current_user.get("acceso_usuarios"):
+        raise HTTPException(status_code=403, detail="No access")
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(as_dict=True)
+        # Un solo SELECT. `en_sitio` se resuelve con OUTER APPLY (el último evento
+        # de hoy de cada quien) en vez del bucle de una consulta por persona que
+        # usa el kiosco: mismo resultado, una sola ida a la base.
+        cursor.execute("""
+            SELECT
+                d.IdUsuario AS id_usuario,
+                ISNULL(u.Nombre, '(sin usuario)') AS nombre,
+                -- Primera ENTRADA del día YA AJUSTADA, con tope al inicio del día
+                -- para que a las 00:02 no salga "23:58 de ayer".
+                CASE WHEN MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END)
+                         IS NULL THEN NULL
+                     ELSE CASE WHEN DATEADD(MINUTE, -%d, MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END))
+                                    < CAST(CAST(GETDATE() AS date) AS datetime)
+                               THEN CAST(CAST(GETDATE() AS date) AS datetime)
+                               ELSE DATEADD(MINUTE, -%d, MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END))
+                         END
+                END AS entrada,
+                MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END) AS entrada_cruda,
+                MAX(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END) AS ultima_entrada,
+                MAX(CASE WHEN p.TipoEvento = 'SALIDA'  THEN p.FechaHora END) AS salida,
+                COUNT(*) AS eventos,
+                CASE WHEN ult.ultimo_tipo = 'ENTRADA' THEN 1 ELSE 0 END AS en_sitio
+            FROM HUB_NetworkPresence p
+            JOIN HUB_NetworkDevices d ON d.Id = p.IdDispositivo
+            LEFT JOIN HUB_Users u ON u.Id = d.IdUsuario
+            OUTER APPLY (
+                SELECT TOP 1 p2.TipoEvento AS ultimo_tipo
+                FROM HUB_NetworkPresence p2
+                JOIN HUB_NetworkDevices d2 ON d2.Id = p2.IdDispositivo
+                WHERE d2.IdUsuario = d.IdUsuario
+                  AND p2.FechaHora >= CAST(CAST(GETDATE() AS date) AS datetime)
+                ORDER BY p2.Id DESC
+            ) ult
+            WHERE p.FechaHora >= CAST(CAST(GETDATE() AS date) AS datetime)
+              AND p.FechaHora < DATEADD(day, 1, CAST(CAST(GETDATE() AS date) AS datetime))
+              AND d.IdUsuario IS NOT NULL
+            GROUP BY d.IdUsuario, u.Nombre, ult.ultimo_tipo
+            ORDER BY entrada
+        """, (AJUSTE_ENTRADA_MIN, AJUSTE_ENTRADA_MIN))
+        filas = cursor.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+    # Un SELECT aparte para saber quiénes tienen foto (no se traen binarios).
+    con_foto = set(_foto_usuario.listar_fotos(get_connection))
+
+    def _txt(fecha):
+        return fecha.strftime("%Y-%m-%d %H:%M") if fecha else ""
+
+    personas = []
+    for f in filas:
+        entrada_cruda = f.get("entrada_cruda")
+        ultima_entrada = f.get("ultima_entrada")
+        ultima_salida = f.get("salida")
+        # OJO: las comparaciones van ANTES de convertir a texto. Al revés
+        # revienta con "'>' not supported between datetime and str".
+        en_sitio = bool(f.get("en_sitio"))
+
+        # Si sigue dentro, la hora de SALIDA es la de una visita anterior y no la
+        # de hoy: mostrarla junto a "en la oficina" se contradice ("se fue 17:36"
+        # y está aquí a las 18:10, porque salió y volvió). Se vacía y, si entró
+        # otra vez, se anota el reingreso.
+        reingreso = ""
+        if en_sitio:
+            if ultima_entrada and ultima_salida and ultima_entrada > entrada_cruda:
+                reingreso = _txt(ultima_entrada)
+            salida_txt = ""
+        else:
+            salida_txt = _txt(ultima_salida)
+
+        # Caso límite: si al restar los 4 minutos la entrada queda DESPUÉS de la
+        # salida se vería "llegó 08:05 / se fue 08:02", que es imposible y hace
+        # dudar de toda la pantalla. Se queda la hora cruda (sin ajustar).
+        entrada_mostrar = f.get("entrada")
+        if not en_sitio and ultima_salida and entrada_mostrar and entrada_mostrar > ultima_salida:
+            entrada_mostrar = entrada_cruda
+
+        personas.append({
+            "id_usuario": int(f["id_usuario"]),
+            "nombre": f.get("nombre") or "(sin usuario)",
+            "entrada": _txt(entrada_mostrar),
+            "salida": salida_txt,
+            "reingreso": reingreso,
+            "eventos": int(f.get("eventos") or 0),
+            "en_sitio": en_sitio,
+            "tiene_foto": int(f["id_usuario"]) in con_foto,
+        })
+
+    dentro = sum(1 for p in personas if p["en_sitio"])
+    return {
+        "personas": personas,
+        "total": len(personas),
+        "dentro": dentro,
+        "salieron": len(personas) - dentro,
+        "actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
 # --- Inventory endpoints ---
 
 @app.get("/api/inventory/items")
@@ -5603,7 +5742,9 @@ try:
     if _has_spa and (_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
-    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas", "kilometros", "notas", "panel", "pantalla_tv"}
+    # Rutas de la SPA que devuelven index.html. Se compara el PRIMER segmento, así
+    # que "usuarios" también cubre /usuarios/{id} y "admin" también /admin/usuarios.
+    _SPA_ROUTES = {"login", "dashboard", "cotizaciones", "cotizaciones_materiales", "usuarios", "admin", "config", "clientes", "registro_reportes", "registro_reportes/", "ia", "legends", "tickets_oxxogas", "kilometros", "notas", "panel", "pantalla_tv"}
     # Shell y PWA nunca se cachean (el bundle js/css usa hashes y sí se cachea)
     _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
     _NO_STORE_FILES = {"index.html", "sw.js", "manifest.webmanifest"}

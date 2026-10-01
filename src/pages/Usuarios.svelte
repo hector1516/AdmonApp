@@ -4,6 +4,11 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
 
+	// Modo pestaña: lo usa src/pages/Admin.svelte, que pone el encabezado y la
+	// barra de pestañas del módulo. Así acá no se vuelve a pintar el .page ni el
+	// botón ⬅️ (mismo criterio que `Notas embebido` en Panel.svelte).
+	let { embebido = false } = $props();
+
 	let usuarios = $state([]);
 	let loading = $state(true);
 	let error = $state('');
@@ -73,11 +78,19 @@
 	});
 </script>
 
-<div class="page">
-	<div class="header">
-		<button class="btn btn-sm btn-secondary" on:click={() => navigate('/dashboard')} title="Volver">⬅️</button>
-		<h1>👥 Administrador de usuarios</h1>
-	</div>
+<div class:page={!embebido}>
+	{#if !embebido}
+		<div class="header">
+			<button class="btn btn-sm btn-secondary" on:click={() => navigate('/dashboard')} title="Volver">⬅️</button>
+			<h1>👥 Administrador de usuarios</h1>
+		</div>
+	{:else}
+		<!-- Modo pestaña: el título corto de la sección, porque el encabezado de
+		     la página ya dice "⚙️ Administración". -->
+		<div class="embed-titulo">
+			<h2>👥 Administración de usuarios</h2>
+		</div>
+	{/if}
 
 	<div class="card" style="margin-bottom: 0.75rem;">
 		<p style="color: var(--color-text-muted); font-size: 0.8rem; text-transform: uppercase; margin: 0 0 0.25rem;">Total usuarios</p>
@@ -128,6 +141,11 @@
 </div>
 
 <style>
+	/* Título de la sección cuando esta vista va dentro de una pestaña
+	   (src/pages/Admin.svelte). */
+	.embed-titulo { margin: 0 0 0.75rem; }
+	.embed-titulo h2 { margin: 0; font-size: 1.05rem; font-weight: 700; }
+
 	/* MAC del teléfono (Detección de Red 📡): monoespaciada para leerla de un
 	   vistazo. Va aquí y no en styles/app.css porque ese archivo es del shell
 	   canónico (lo genera tools/sync_shell.py) y el CI lo valida. */

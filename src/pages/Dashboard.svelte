@@ -15,7 +15,7 @@
 		{ icon: '📊', title: 'Dashboard', desc: 'Pantalla de la TV y más', path: '/panel' },
 		{ icon: '📦', title: 'Cotizaciones Materiales', desc: 'Crear y gestionar', path: '/cotizaciones_materiales', perm: 'acceso_cotizaciones' },
 		{ icon: '📋', title: 'Registro de Reportes', desc: 'Visualización global admin', path: '/registro_reportes', perm: 'acceso_registro_reportes' },
-		{ icon: '👥', title: 'Administrador de Usuarios', desc: 'Usuarios y permisos', path: '/usuarios', perm: 'acceso_usuarios' },
+		{ icon: '🛠️', title: 'Administración', desc: 'Asistencia y usuarios', path: '/admin', perm: 'acceso_usuarios' },
 		{ icon: '📇', title: 'Clientes', desc: 'Catálogo general', path: '/clientes', perm: 'acceso_cotizaciones' },
 		{ icon: '⛽', title: 'Tickets de OxxoGas', desc: 'Tickets y facturas', path: '/tickets_oxxogas', perm: 'acceso_vales_oxxogas' },
 		{ icon: '🛣️', title: 'Kilómetros', desc: 'Consumo semanal y captura', path: '/kilometros', perm: 'acceso_registro_kilometros' },
