@@ -2,4 +2,4 @@
    Úsalo en el banner:  import { APP_VERSION, SHELL_VERSION } from '$lib/shell.js' */
 export const SHELL_VERSION = '1.11.0';
 export const APP_ID = 'admon';
-export const APP_VERSION = '1.6.1';  // 1.6.1: la asistencia avisa cuando el escáner de red no reporta y deja de pintar el estado en sitio (los datos estaban congelados).
+export const APP_VERSION = '1.6.2';  // 1.6.2: el estado de la asistencia se decide con el ciclo del escáner, no con los movimientos (falsos positivos a media mañana).

@@ -25,7 +25,8 @@
 	const AUTO_MS = 60_000;
 
 	let datos = $state({ personas: [], total: 0, dentro: 0, salieron: 0, actualizado: '',
-		estado: 'sin_datos', ultimo_evento: '', minutos_sin_actualizar: 0, marcha: null });
+		estado: 'sin_datos', ciclo_scan: '', minutos_sin_scan: 0,
+		ultimo_evento: '', minutos_sin_movimiento: 0, marcha: null });
 	let loading = $state(true);
 	let error = $state('');
 	// 📷 Avatar por usuario: {id → blob URL}. Igual que en la lista de
@@ -37,13 +38,18 @@
 	let enVuelo = false;
 
 	/*
-		`en_sitio` sale del ÚLTIMO evento de cada quien, así que depende de que el
-		escáner esté escribiendo y de que lo que escribe sea real. Si lo uno o lo
-		otro falla, la pantalla estaría diciendo "sigue en la oficina" con
+		`en_sitio` sale del ÚLTIMO evento de cada quien, así que sólo es confiable
+		si el escáner sigue escaneando y si lo que escribió es real. Si lo uno o
+		lo otro falla, la pantalla estaría diciendo "sigue en la oficina" con
 		información que no la sostiene (lo que pasó el 30 de septiembre: el
 		escáner se cayó a las 15:56, nadie registró su salida y todos aparecían
 		en verde toda la noche). Con datos congelados o con una marcha simultánea
 		NO se pinta el estado: se avisa que no se sabe.
+
+		OJO: lo que decide es el CICLO del escáner, no la última entrada o salida.
+		Los movimientos son por evento — si a media mañana nadie entra ni sale en
+		media hora no se registra nada y eso es normal, no es que el escáner esté
+		caído.
 	*/
 	const congelado = $derived(datos.estado === 'congelado');
 	const inestable = $derived(datos.estado === 'inestable');
@@ -144,9 +150,11 @@
 <div class="embed-bar">
 	<span class="actualizado">
 		{#if sinEstado}
-			Último dato del escáner: <b>{datos.ultimo_evento?.slice(11)}</b>
+			Último ciclo del escáner: <b>{datos.ciclo_scan?.slice(11) || 'nunca'}</b>
+			{#if datos.ultimo_evento}· último movimiento {datos.ultimo_evento.slice(11)}{/if}
 		{:else if datos.actualizado}
 			Actualizado <b>{datos.actualizado.slice(11)}</b> · se refresca solo cada minuto
+			{#if datos.ultimo_evento}<span class="dim">· último movimiento {datos.ultimo_evento.slice(11)}</span>{/if}
 		{/if}
 	</span>
 	<button class="btn btn-sm btn-secondary" onclick={() => cargar()} disabled={loading}>
@@ -164,10 +172,11 @@
 	<div class="alerta">
 		<span class="alerta-ic">⚠️</span>
 		<span>
-			<b>El escáner de red no reporta desde hace {antiguedad(datos.minutos_sin_actualizar)}</b>
-			(último evento {datos.ultimo_evento}). No se sabe quién sigue en la oficina: abajo
-			se ve cuándo entró y salió cada quien la última vez que se registró, pero el
-			estado de "en sitio / fuera" no es confiable. Hay que revisar el escáner.
+			<b>El escáner de red no corre desde hace {antiguedad(datos.minutos_sin_scan)}</b>
+			{#if datos.ciclo_scan}(último ciclo a las {datos.ciclo_scan.slice(11)}){:else}(nunca ha registrado un ciclo){/if}.
+			No se sabe quién sigue en la oficina: abajo se ve cuándo entró y salió cada
+			quien la última vez que se registró, pero el estado de "en sitio / fuera" no
+			es confiable. Hay que revisar el escáner.
 		</span>
 	</div>
 {:else if inestable}
@@ -185,10 +194,9 @@
 	<div class="alerta">
 		<span class="alerta-ic">⚠️</span>
 		<span>
-			<b>Hay registros con fecha que todavía no llega</b> (el último dice
-			{datos.ultimo_evento?.slice(11)}, y ahora mismo es más tarde en el reloj del
-			servidor). Los relojes no coinciden, así que las horas de arriba no son de
-			fiar hasta que se revise el detector.
+			<b>Hay registros con fecha que todavía no llega</b> (el escáner escribió un
+			ciclo con hora {datos.ciclo_scan?.slice(11)}). Los relojes no coinciden, así que
+			las horas de arriba no son de fiar hasta que se revise el detector.
 		</span>
 	</div>
 {/if}
@@ -299,6 +307,7 @@
 		color: var(--color-text-muted);
 	}
 	.actualizado b { color: var(--color-text); }
+	.actualizado .dim { color: var(--color-text-muted); }
 	.err { color: var(--color-danger); margin: 0; }
 
 	/* Métricas: los tres números de arriba, con el mismo código de color que

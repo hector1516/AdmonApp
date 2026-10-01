@@ -3,6 +3,28 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.6.2] - 2026-10-01
+
+### Corregido
+- **El aviso de "el escáner no reporta" era un falso positivo.** Se medía
+  contra la última entrada o salida registrada, y eso no dice si el escáner
+  vive: los movimientos son por evento, así que a media mañana, con todos
+  sentados trabajando, no hay ni un registro nuevo en media hora y la pantalla
+  avisaba de un escáner caído que estaba corriendo perfecto.
+  Ahora lo que decide es el **latido del escáner**: su último ciclo en
+  `HUB_NetworkScanRuns` (con respaldo en `HUB_NetworkScanResults`, según
+  dónde esté escribiendo), que llega uno cada minuto.
+  - El ciclo se busca primero en la tabla nueva y se cae a la vieja, como
+    hace el worker.
+  - La antigüedad la calcula el servidor SQL con `DATEDIFF`, no Python: el
+    reloj del contenedor va horas adelantado.
+  - Si el escáner nunca ha corrido, se dice "no se sabe" en vez de "no hay
+    datos de hoy": sin escáner tampoco se puede afirmar que no vino nadie.
+  - La barra ahora muestra el último ciclo **y** el último movimiento, que son
+    dos cosas distintas.
+- **La hora de "Actualizado" sale del reloj del servidor SQL**: se leía
+  "Actualizado 15:12" cuando en la oficina eran las 09:12.
+
 ## [1.6.1] - 2026-10-01
 
 ### Corregido

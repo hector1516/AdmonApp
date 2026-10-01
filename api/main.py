@@ -951,12 +951,18 @@ async def delete_user_foto(user_id: int, current_user: dict = Depends(get_curren
 # una salida que todavía no pasa.
 AJUSTE_ENTRADA_MIN = 4  # ver el docstring de asistencia_hoy() en dashboard/api/datos.py
 
-# Minutos que puede pasar el escáner sin reportar nada antes de que la pantalla
-# deje de dar por buenos los datos. El escáner corre cada minuto y su detector
-# tiene 5 min de tolerancia, así que 10 min ya no es "un ratito sin cambios":
-# es que nadie está escribiendo. Sin este aviso, un escáner caído deja la
-# pantalla lanzando "9 en sitio" con datos de hace horas: la última cosa que se
-# sabe de cada quien es que entró, y nunca se registró su salida.
+# Minutos que puede pasar el ESCÁNER sin registrar un ciclo antes de que la
+# pantalla deje de dar por buenos los datos. Corre cada minuto, así que 10 min
+# ya no es "un ratito": es que nadie está escaneando. Sin este aviso, un
+# escáner caído deja la pantalla lanzando "9 en sitio" con datos de hace horas:
+# la última cosa que se sabe de cada quien es que entró, y su salida nunca
+# llegó a escribirse.
+#
+# OJO: se mide contra los CICLOS del escáner y NO contra los movimientos de
+# gente. Los movimientos son por evento: si nadie entra ni sale en media hora no
+# pasa nada y no hay ni un solo registro nuevo. Medir eso (que fue como se hizo
+# primero) daba falsos positivos a media mañana, con el escáner funcionando
+# perfecto. Lo que dice si el escáner vive es su último ciclo.
 VENTANA_SIN_ESCANER_MIN = 10
 
 # Marcha simultánea: cuántas personas tienen que registrar el mismo tipo de
@@ -968,6 +974,37 @@ VENTANA_SIN_ESCANER_MIN = 10
 # todos los equipos "desaparecen" juntos. Sin esta guarda, ese reinicio deja
 # toda la pantalla en verde aunque la oficina esté vacía.
 MARCHA_SIMULTANEA_MIN = 3
+
+
+def _latido_scan(conn):
+    """(ciclo, minutos) del último escáner, o (None, None) si nunca ha corrido.
+
+    `ciclo` es la fecha del último ciclo y `minutos` su antigüedad. La
+    antigüedad la calcula el SERVIDOR SQL con DATEDIFF, no Python: el reloj del
+    contenedor y el del servidor SQL no están sincronizados (difieren horas) y
+    restarlos en Python daba diferencias de miles de minutos.
+
+    El escáner puede escribir en el camino NUEVO (`HUB_NetworkScanRuns`, un
+    renglón por ciclo con la lista completa de MACs) o en el VIEJO
+    (`HUB_NetworkScanResults`, un renglón por MAC y ciclo). Las dos tablas
+    existen y sólo una recibe datos a la vez, así que se pregunta primero la
+    nueva y se cae a la vieja: es el mismo criterio que usa el worker. Ambas
+    tienen índice por FechaScan, así que el MAX es barato.
+    """
+    consulta = ("SELECT MAX({col}) AS ciclo, "
+                "DATEDIFF(MINUTE, MAX({col}), GETDATE()) AS minutos FROM dbo.{tab}")
+    cur = conn.cursor(as_dict=True)
+    for tab, col in (("HUB_NetworkScanRuns", "FechaScan"),
+                     ("HUB_NetworkScanResults", "FechaScan")):
+        try:
+            cur.execute(consulta.format(tab=tab, col=col))
+        except Exception:
+            continue  # la tabla no existe en esta base: se prueba la otra
+        fila = cur.fetchone()
+        if fila and fila.get("ciclo"):
+            return fila["ciclo"], int(fila["minutos"] or 0)
+    cur.close()
+    return None, None
 
 
 @app.get("/api/asistencia")
@@ -1084,31 +1121,46 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
         dentro = sum(1 for p in personas if p["en_sitio"])
 
         # ── Qué tan frescos son los datos ─────────────────────────────────────
-        # `en_sitio` se decide con el último evento de cada quien, así que si el
-        # escáner lleva un rato sin escribir, ese "último evento" es viejo y la
-        # pantalla estaría afirmando que todos siguen ahí con información de hace
-        # horas. Se mide la edad del dato más reciente del día y se devuelve junto
-        # con un estado, para que el front pueda avisar en vez de mentir.
-        cursor2 = conn.cursor()
+        # `en_sitio` se decide con el último evento de cada quien, así que sólo
+        # es confiable si el escáner sigue escaneando: si se cayó, el "último
+        # evento" de todos es viejo y la pantalla estaría afirmando que siguen
+        # ahí con información de hace horas.
+        #
+        # OJO con qué se mide: el escáner escribe UN CICLO cada minuto, pero los
+        # movimientos sólo existen cuando alguien entra o sale. Por eso el
+        # estado se decide con el ciclo (el latido del escáner) y el último
+        # movimiento se devuelve sólo como dato.
+        ciclo_scan, minutos_scan = _latido_scan(conn)
+
+        cursor2 = conn.cursor(as_dict=True)
         cursor2.execute("""
-            SELECT MAX(FechaHora) AS ultimo, DATEDIFF(MINUTE, MAX(FechaHora), GETDATE()) AS minutos
+            SELECT GETDATE() AS ahora,
+                   MAX(FechaHora) AS ultimo,
+                   DATEDIFF(MINUTE, MAX(FechaHora), GETDATE()) AS minutos,
+                   CASE WHEN MAX(FechaHora) > GETDATE() THEN 1 ELSE 0 END AS hay_futuro
             FROM HUB_NetworkPresence
             WHERE FechaHora >= CAST(CAST(GETDATE() AS date) AS datetime)
         """)
-        fila = cursor2.fetchone()
-        ultimo_evento, minutos = fila[0], int(fila[1] or 0)
+        fila = cursor2.fetchone() or {}
+        ahora_servidor = fila.get("ahora") or datetime.now()
+        ultimo_evento = fila.get("ultimo")
+        minutos_movimiento = int(fila.get("minutos") or 0)
+        hay_futuro = bool(fila.get("hay_futuro"))
         cursor2.close()
 
-        if ultimo_evento is None:
-            # Hoy todavía no hay ningún movimiento: no es que los datos estén
-            # congelados, es que el día del servidor todavía no empezó a llenarse.
-            estado = "sin_datos"
-        elif minutos < 0:
-            # Hay movimientos con fecha futura: los relojes no coinciden (o se
-            # escribió con una hora equivocada). Tampoco se puede afirmar nada.
-            estado = "futuro"
-        elif minutos > VENTANA_SIN_ESCANER_MIN:
+        if minutos_scan is None:
+            # No hay ni un ciclo registrado: el escáner no está corriendo (o
+            # nunca corrió). No se puede afirmar quién está aquí.
             estado = "congelado"
+        elif minutos_scan < 0 or hay_futuro:
+            # El escáner (o algún movimiento) trae fecha que todavía no llega:
+            # los relojes no coinciden. Tampoco se puede afirmar nada.
+            estado = "futuro"
+        elif minutos_scan > VENTANA_SIN_ESCANER_MIN:
+            estado = "congelado"
+        elif ultimo_evento is None:
+            # El escáner vive y hoy nadie ha entrado ni salido todavía.
+            estado = "sin_datos"
         else:
             estado = "ok"
 
@@ -1146,9 +1198,16 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
             "total": len(personas),
             "dentro": dentro,
             "salieron": len(personas) - dentro,
-            "actualizado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            # Hora del servidor SQL, no la del contenedor (van horas de
+            # diferencia y en pantalla se leía "Actualizado 15:12" a las 09:12
+            # de la mañana).
+            "actualizado": ahora_servidor.strftime("%Y-%m-%d %H:%M:%S"),
+            # Latido del escáner: lo que dice si los datos son frescos.
+            "ciclo_scan": ciclo_scan.strftime("%Y-%m-%d %H:%M:%S") if ciclo_scan else "",
+            "minutos_sin_scan": minutos_scan,
+            # Último movimiento de gente: informative, NO decide si se confía.
             "ultimo_evento": ultimo_evento.strftime("%Y-%m-%d %H:%M") if ultimo_evento else "",
-            "minutos_sin_actualizar": minutos,
+            "minutos_sin_movimiento": minutos_movimiento,
             "estado": estado,
             "marcha": marcha,
         }
