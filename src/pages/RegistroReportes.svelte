@@ -6,7 +6,7 @@
 	import OfflineNotice from '../components/OfflineNotice.svelte';
 
 	// REGISTRO DE REPORTES (Admin) — clon del HUB views/registro_reportes.py
-	// Lista global con pestañas: Firmados / Papelera (eliminados)
+	// Lista global con pestañas: Firmados / 📊 Excel (exportación) / Papelera
 	// Permiso: acceso_registro_reportes
 
 	let lista = $state([]);
@@ -15,7 +15,11 @@
 	let msg = $state('');
 	let busqueda = $state('');
 	let busy = $state(false);
-	let tab = $state('firmados'); // 'firmados' | 'papelera'
+	let tab = $state('firmados'); // 'firmados' | 'excel' | 'papelera'
+	// IdReporte seleccionados en la pestaña Excel (la selección NO se mezcla
+	// entre pestañas: cambiarTab la limpia).
+	let seleccion = $state([]);
+	let busyExcel = $state(false);
 
 	function tieneAcceso() {
 		try {
@@ -51,6 +55,100 @@
 	// Tab papelera: eliminados (Eliminado = 1)
 	let papelera = $derived(filtrados.filter(r => r.Eliminado === 1 || r.Eliminado === true));
 
+	// Lista visible: la pestaña Excel exporta los MISMOS reportes firmados,
+	// así que reutiliza la lista de la pestaña 🟢 Firmados.
+	let listaTab = $derived(tab === 'papelera' ? papelera : firmados);
+
+	// Total de horas de un reporte: (Fin − Inicio) + TiempoTraslado.
+	// Misma fórmula que usa el backend para la columna B del Excel (2 cifras).
+	function horasReporte(r) {
+		if (!r || !r.FechaHoraInicio || !r.FechaHoraFin) return null;
+		const h = (new Date(r.FechaHoraFin) - new Date(r.FechaHoraInicio)) / 3600000
+			+ Number(r.TiempoTraslado || 0);
+		return Math.round(h * 100) / 100;
+	}
+
+	// Cliente de la selección: lo fija el PRIMER reporte marcado; el resto
+	// debe coincidir (el Excel solo admite reportes de un mismo cliente).
+	let clienteSel = $derived(
+		seleccion.length
+			? String(lista.find(x => x.IdReporte === seleccion[0])?.Cliente || '').trim()
+			: ''
+	);
+
+	let horasSel = $derived(
+		seleccion.reduce((s, id) => s + (horasReporte(lista.find(x => x.IdReporte === id)) || 0), 0)
+	);
+
+	// Click en el checkbox de una card (pestaña Excel). Se decide ANTES de que
+	// el navegador alterne `checked`: si no se permite, preventDefault() deja
+	// la casilla como estaba; si se permite, se actualiza `seleccion` para que
+	// coincida con el toggle nativo.
+	function clicCheckbox(e, r) {
+		e.stopPropagation();
+		if (seleccion.includes(r.IdReporte)) {
+			seleccion = seleccion.filter(x => x !== r.IdReporte);
+			return;
+		}
+		if (horasReporte(r) === null) {
+			e.preventDefault();
+			error = `${r.Folio}: falta la hora de inicio o fin, no puede exportarse.`;
+			msg = '';
+			return;
+		}
+		const cli = String(r.Cliente || '').trim();
+		if (seleccion.length && cli !== clienteSel) {
+			e.preventDefault();
+			error = `Solo reportes del mismo cliente. La selección es de: ${clienteSel}`;
+			msg = '';
+			return;
+		}
+		error = '';
+		seleccion = [...seleccion, r.IdReporte];
+	}
+
+	function limpiarSeleccion() {
+		seleccion = [];
+		error = '';
+		msg = '';
+	}
+
+	// Descarga el XLSX generado por /api/reportes/excel y lo guarda con el
+	// nombre que trae el Content-Disposition (Reportes_<Cliente>_AAAA-MM-DD).
+	async function descargarExcel() {
+		if (!seleccion.length || busyExcel) return;
+		error = '';
+		msg = '';
+		busyExcel = true;
+		try {
+			const res = await fetch(`/api/reportes/excel?ids=${seleccion.join(',')}`, {
+				headers: auth.authHeader()
+			});
+			if (!res.ok) {
+				const d = await res.json().catch(() => ({}));
+				throw new Error(d.detail || 'No se pudo generar el Excel.');
+			}
+			const blob = await res.blob();
+			const cd = res.headers.get('Content-Disposition') || '';
+			const m = cd.match(/filename="?([^";]+)"?/);
+			const nombre = (m && m[1]) || 'Reportes.xlsx';
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = nombre;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+			msg = `✅ ${seleccion.length} reportes exportados a ${nombre}.`;
+			seleccion = [];
+		} catch (e) {
+			error = e.message || 'No se pudo generar el Excel.';
+		} finally {
+			busyExcel = false;
+		}
+	}
+
 	async function cargar() {
 		loading = true;
 		error = '';
@@ -60,6 +158,12 @@
 			// Lista con caché offline: red primero; sin red sirve la última
 			// lista cacheada por el prefetch (mismo path/llave `?`).
 			lista = (await api.get(`/reportes?${params}`)) || [];
+			// Si se refrescó mientras había selección de Excel, descarta los ids
+			// que ya no existan en la lista (evita 404 en la exportación).
+			if (seleccion.length) {
+				const validos = new Set(lista.map(x => x.IdReporte));
+				seleccion = seleccion.filter(id => validos.has(id));
+			}
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : 'No se pudo cargar. Revisa tu conexión.';
 		} finally {
@@ -160,6 +264,10 @@
 
 	function cambiarTab(nuevoTab) {
 		tab = nuevoTab;
+		// La selección de la pestaña Excel no debe cruzarse de pestaña.
+		seleccion = [];
+		error = '';
+		msg = '';
 		cargar();
 	}
 </script>
@@ -189,6 +297,14 @@
 		</button>
 		<button 
 			class="tab-btn" 
+			class:active={tab === 'excel'}
+			on:click={() => cambiarTab('excel')}
+			style="padding: 0.5rem 1rem; border: none; background: transparent; color: var(--color-text); font-weight: 600; border-bottom: 2px solid transparent; cursor: pointer;"
+		>
+			📊 Excel ({firmados.length})
+		</button>
+		<button 
+			class="tab-btn" 
 			class:active={tab === 'papelera'}
 			on:click={() => cambiarTab('papelera')}
 			style="padding: 0.5rem 1rem; border: none; background: transparent; color: var(--color-text); font-weight: 600; border-bottom: 2px solid transparent; cursor: pointer;"
@@ -197,41 +313,90 @@
 		</button>
 	</div>
 
+	<!-- Pestaña Excel: barra de selección + descarga del formato -->
+	{#if tab === 'excel' && !loading}
+		<div class="excel-bar">
+			{#if clienteSel}
+				<span class="chip" title="Cliente de la selección">
+					👤 {clienteSel}
+					<button class="chip-x" on:click={limpiarSeleccion} title="Vaciar selección">✕</button>
+				</span>
+			{/if}
+			<span class="excel-cuenta">
+				<strong>{seleccion.length}</strong> seleccionado{seleccion.length === 1 ? '' : 's'}
+				· {horasSel.toFixed(2)} h
+			</span>
+			<div style="flex: 1"></div>
+			<button
+				class="btn btn-sm btn-primary"
+				on:click={descargarExcel}
+				disabled={busyExcel || seleccion.length === 0}
+			>
+				{busyExcel ? '⏳ Generando…' : `⬇️ Descargar Excel${seleccion.length ? ` (${seleccion.length})` : ''}`}
+			</button>
+		</div>
+		<p class="excel-hint">
+			Selecciona reportes del <strong>mismo cliente</strong> (solo 🟢 Firmados): cada uno se exporta en una
+			fila con su consecutivo, horas totales (fin − inicio + traslado) y la descripción del servicio.
+		</p>
+	{/if}
+
 	{#if loading}
 		<div class="empty">Cargando…</div>
-	{:else if (tab === 'firmados' ? firmados : papelera).length === 0}
+	{:else if listaTab.length === 0}
 		<div class="empty">
-			{#if tab === 'firmados'}
-				No hay reportes firmados registrados.
-			{:else}
+			{#if tab === 'papelera'}
 				Papelera vacía.
+			{:else}
+				No hay reportes firmados registrados.
 			{/if}
 		</div>
 	{:else}
 		<p style="color: var(--color-text-muted); font-size: 0.8rem; margin-bottom: 0.5rem;">
-			Mostrando <strong>{(tab === 'firmados' ? firmados : papelera).length}</strong> de <strong>{lista.length}</strong> reportes globales.
+			Mostrando <strong>{listaTab.length}</strong> de <strong>{lista.length}</strong> reportes globales.
 		</p>
 
+		<!-- Contenido de la card (folio/estatus/cliente/datos): compartido por
+		     la lista normal (botón → detalle) y la de Excel (label + checkbox). -->
+		{#snippet cuerpo(r)}
+			<div style="flex: 1;">
+				<div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+					<span style="font-weight: 800; color: var(--color-primary-light);">{r.Folio}</span>
+					{@html estatusHtml(r.Estatus)}
+					{#if r.Eliminado === 1 || r.Eliminado === true}
+						<span class="badge" style="background:#EF4444;">🗑️ Papelera</span>
+					{/if}
+				</div>
+				<div style="font-size: 0.9rem; margin-top: 0.15rem;">{r.Cliente}</div>
+				<div style="font-size: 0.75rem; color: var(--color-text-muted);">
+					{r.Tecnico} · {formatearFecha(r.FechaHoraInicio)} · {r.MaquinaLinea || '—'}
+				</div>
+			</div>
+			<div style="text-align: right; font-size: 0.75rem; color: var(--color-text-muted);">
+				Cot: {r.Cotizacion || '—'}
+				{#if tab === 'excel'}
+					<div class="horas">{horasReporte(r) ?? '⚠️'}{horasReporte(r) != null ? ' h' : ' sin horas'}</div>
+				{/if}
+			</div>
+		{/snippet}
+
 		<div class="list">
-			{#each (tab === 'firmados' ? firmados : papelera) as r (r.IdReporte)}
-				<button class="list-card" on:click={() => verDetalle(r)}>
-					<div style="flex: 1;">
-						<div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-							<span style="font-weight: 800; color: var(--color-primary-light);">{r.Folio}</span>
-							{@html estatusHtml(r.Estatus)}
-							{#if r.Eliminado === 1 || r.Eliminado === true}
-								<span class="badge" style="background:#EF4444;">🗑️ Papelera</span>
-							{/if}
-						</div>
-						<div style="font-size: 0.9rem; margin-top: 0.15rem;">{r.Cliente}</div>
-						<div style="font-size: 0.75rem; color: var(--color-text-muted);">
-							{r.Tecnico} · {formatearFecha(r.FechaHoraInicio)} · {r.MaquinaLinea || '—'}
-						</div>
-					</div>
-					<div style="text-align: right; font-size: 0.75rem; color: var(--color-text-muted);">
-						Cot: {r.Cotizacion || '—'}
-					</div>
-				</button>
+			{#each listaTab as r (r.IdReporte)}
+				{#if tab === 'excel'}
+					<label class="list-card">
+						<input
+							type="checkbox"
+							class="chk"
+							checked={seleccion.includes(r.IdReporte)}
+							on:click={(e) => clicCheckbox(e, r)}
+						/>
+						{@render cuerpo(r)}
+					</label>
+				{:else}
+					<button class="list-card" on:click={() => verDetalle(r)}>
+						{@render cuerpo(r)}
+					</button>
+				{/if}
 			{/each}
 		</div>
 	{/if}
@@ -252,4 +417,60 @@
 	.badge { padding: 0.1rem 0.5rem; border-radius: 12px; font-weight: 600; font-size: 0.7rem; color: #fff; }
 	.tab-btn.active { color: var(--color-primary-light); border-bottom-color: var(--color-primary-light); }
 	.tab-btn:hover:not(.active) { color: var(--color-text-muted); }
+
+	/* ── Pestaña 📊 Excel: barra de selección, chips y ayudas ─────────── */
+	.excel-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		padding: 0.65rem 0.75rem;
+		background: var(--color-surface);
+		border: 1px solid rgba(255, 255, 255, 0.06);
+		border-radius: var(--radius);
+		margin-bottom: 0.5rem;
+	}
+	.excel-cuenta { font-size: 0.85rem; color: var(--color-text-muted); }
+	.excel-cuenta strong { color: var(--color-primary-light); }
+	.excel-hint {
+		font-size: 0.78rem;
+		color: var(--color-text-muted);
+		margin: 0 0 0.75rem;
+		line-height: 1.45;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		background: rgba(255, 107, 0, 0.12);
+		border: 1px solid rgba(255, 107, 0, 0.35);
+		color: var(--color-primary-light);
+		border-radius: 999px;
+		padding: 0.15rem 0.65rem;
+		font-size: 0.78rem;
+		font-weight: 600;
+	}
+	.chip-x {
+		background: transparent;
+		border: none;
+		color: inherit;
+		cursor: pointer;
+		font-size: 0.75rem;
+		padding: 0 0.15rem;
+		line-height: 1;
+	}
+	.chk {
+		width: 1.25rem;
+		height: 1.25rem;
+		flex-shrink: 0;
+		margin-right: 0.85rem;
+		accent-color: var(--color-primary);
+		cursor: pointer;
+	}
+	.horas {
+		margin-top: 0.2rem;
+		font-weight: 700;
+		color: var(--color-primary-light);
+		font-size: 0.78rem;
+	}
 </style>

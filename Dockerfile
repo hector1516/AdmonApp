@@ -22,6 +22,9 @@ COPY dist/ ./dist/
 COPY ECCSA_SHELL_VERSION ./ECCSA_SHELL_VERSION
 # Logo ECCSA para el encabezado del PDF de cotizaciones (opcional: el builder lo omite si falta)
 COPY eccsa_logo.png ./eccsa_logo.png
+# Template del formato de Excel (hoja "Calculo") que llena el endpoint
+# /api/reportes/excel. Destino sin espacios para simplificar la ruta en Python.
+COPY "formatos excel/Formato Cotizaciones.xlsx" ./formatos_excel/FormatoCotizaciones.xlsx
 
 EXPOSE 8000
 

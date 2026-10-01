@@ -3,6 +3,35 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.5.0] - 2026-10-01
+
+### Nuevo
+- **Registro de Reportes: exportación a Excel** del formato de cotizaciones
+  (pestaña **📊 Excel**, junto a 🟢 Firmados y 🗑️ Papelera):
+  - **Selección múltiple**: cada reporte firmado de la lista trae su casilla;
+    solo se pueden marcar reportes del **mismo cliente** (el primero fija el
+    cliente y el resto se bloquea con aviso), y se ve en la barra el cliente,
+    cuántos van seleccionados y la suma de horas. Si un reporte no tiene hora
+    de inicio o fin no se puede marcar.
+  - **Columnas del formato** (hoja `Calculo`, un reporte por fila desde la 3):
+    **A** = consecutivo (1, 2, 3…), **B** = total de horas
+    `(fin − inicio) + traslado` con 2 cifras (la comida no se descuenta) y
+    **C** = `Folio · descripción del servicio`. El resto de columnas (modelo,
+    costos, precios) quedan como en el template, con las fórmulas de precio
+    replicadas hacia abajo y los `=SUM(...)` de totales ajustados al rango
+    real de filas.
+  - **Validaciones en el servidor** (`GET /api/reportes/excel?ids=...`):
+    reportes Firmados, fuera de papelera, todos del mismo cliente, con horas
+    completas y máximo 500 por descarga; se ordenan por fecha y folio para
+    que el consecutivo salga siempre corrido igual.
+  - **Archivo descargado** con nombre genérico
+    `Reportes_<Cliente>_AAAA-MM-DD.xlsx`, generado desde el template real
+    `formatos excel/Formato Cotizaciones.xlsx` (la hoja `Cotizacion` no se
+    toca).
+- Se vuelve a agregar **openpyxl** a `requirements.txt` (lo había quitado el
+  escaneo del 2026-09-27) y el `Dockerfile` ahora copia el template del
+  formato al contenedor — por eso este despliegue reconstruye la imagen.
+
 ## [1.4.1] - 2026-09-30
 
 ### Mejoras

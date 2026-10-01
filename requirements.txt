@@ -39,6 +39,13 @@ pytz
 reportlab==4.4.0
 Pillow==11.0.0
 
+# --- Exportación a Excel (propio de Admon, no va en el canónico de Field) ----
+# 2026-10-01: vuelve openpyxl para GET /api/reportes/excel (pestaña 📊 Excel
+# de Registro de Reportes) que llena la hoja "Calculo" del template
+# "formatos excel/Formato Cotizaciones.xlsx" con un reporte por fila.
+# Se había quitado el 2026-09-27 porque ningún módulo lo importaba.
+openpyxl==3.1.5
+
 # --- IA (mandato, sin pin en las 3 apps) ------------------------------------
 google-generativeai
 google.ai.generativelanguage

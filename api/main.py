@@ -2456,6 +2456,161 @@ async def api_list_reportes(tecnico: str = "", eliminados: bool = False, current
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+@app.get("/api/reportes/excel")
+async def api_reportes_excel(ids: str, current_user: dict = Depends(get_current_user)):
+    """Genera el formato de Excel (hoja "Calculo") con UN reporte por fila.
+
+    Formato: "formatos excel/Formato Cotizaciones.xlsx" (en el contenedor se
+    copia como "formatos_excel/FormatoCotizaciones.xlsx"). La fila 2 son los
+    encabezados (Part/Cant/Desc…) y los datos arrancan en la fila 3:
+      A = consecutivo de partidas (1, 2, 3…)
+      B = total de horas del reporte: (Fin − Inicio) + TiempoTraslado
+      C = "Folio · Descripción del servicio"
+    Reglas: todos los reportes deben ser del MISMO cliente, Firmados y sin
+    papelera. `ids` viene como IdReporte separados por coma.
+    """
+    _require_reporte(current_user)
+    # Imports locales: openpyxl solo se carga al pedir el Excel (no al arrancar).
+    import io
+    import re
+    import unicodedata
+    from copy import copy as _copy
+    from pathlib import Path
+
+    import openpyxl
+
+    # --- Parseo y límites de ids -------------------------------------------
+    try:
+        lista_ids = sorted({int(x) for x in str(ids).split(",") if str(x).strip()})
+    except ValueError:
+        raise HTTPException(status_code=400, detail="ids inválidos: usa IdReporte separados por coma.")
+    if not lista_ids:
+        raise HTTPException(status_code=400, detail="Selecciona al menos un reporte.")
+    if len(lista_ids) > 500:
+        raise HTTPException(status_code=400, detail="Máximo 500 reportes por descarga.")
+
+    # --- Carga de los reportes pedidos --------------------------------------
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join(["%s"] * len(lista_ids))
+        cursor.execute(f"""
+            SELECT IdReporte, Folio, Cliente, DescripcionServicio, Fecha,
+                   FechaHoraInicio, FechaHoraFin, TiempoTraslado, Estatus, Eliminado
+            FROM ReportesServicio
+            WHERE IdReporte IN ({placeholders})
+        """, lista_ids)
+        rows = [dict(zip([c[0] for c in cursor.description], r)) for r in cursor.fetchall()]
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+    por_id = {r["IdReporte"]: r for r in rows}
+    faltantes = [str(i) for i in lista_ids if i not in por_id]
+    if faltantes:
+        raise HTTPException(status_code=404, detail=f"Reportes no encontrados: {', '.join(faltantes)}")
+
+    # --- Validaciones del negocio ------------------------------------------
+    no_firmados = sorted(
+        r["Folio"] for r in rows
+        if r.get("Estatus") != "Firmado" or r.get("Eliminado") not in (0, False, None)
+    )
+    if no_firmados:
+        raise HTTPException(status_code=400,
+                            detail=f"Solo reportes FIRMADOS y fuera de la papelera: {', '.join(no_firmados)}")
+    clientes = {(r.get("Cliente") or "").strip() for r in rows}
+    if len(clientes) > 1:
+        raise HTTPException(status_code=400,
+                            detail="Todos los reportes deben ser del mismo cliente. Hay: "
+                                   + ", ".join(sorted(clientes)))
+    sin_horas = sorted(r["Folio"] for r in rows if not r.get("FechaHoraInicio") or not r.get("FechaHoraFin"))
+    if sin_horas:
+        raise HTTPException(status_code=400,
+                            detail=f"Faltan horas (inicio/fin) en: {', '.join(sin_horas)}")
+
+    # Orden determinista por fecha y folio, para que el consecutivo de la
+    # columna A salga corrido siempre igual.
+    reportes = sorted(rows, key=lambda r: (str(r.get("Fecha") or ""), str(r.get("Folio") or "")))
+
+    def _horas(r):
+        """(Fin − Inicio) + Traslado, en horas decimales con 2 cifras."""
+        h = (r["FechaHoraFin"] - r["FechaHoraInicio"]).total_seconds() / 3600.0
+        h += float(r.get("TiempoTraslado") or 0)
+        return round(h, 2)
+
+    # --- Template: en el repo en "formatos excel/", en el contenedor en
+    #     "formatos_excel/" (lo copia el Dockerfile sin espacios en la ruta).
+    base = Path(__file__).resolve().parent.parent
+    candidatos = [
+        base / "formatos_excel" / "FormatoCotizaciones.xlsx",
+        base / "formatos excel" / "Formato Cotizaciones.xlsx",
+    ]
+    template = next((p for p in candidatos if p.exists()), None)
+    if not template:
+        raise HTTPException(status_code=500, detail="No se encontró el template del formato de Excel.")
+
+    wb = openpyxl.load_workbook(template)
+    ws = wb["Calculo"]
+
+    # Estilo de la fila 3 del template (fila de ejemplo) para replicarlo en
+    # cada fila nueva: si no, las filas escritas saldrían sin formato.
+    estilos = {c: _copy(ws[f"{c}3"]._style) for c in ("A", "B", "C", "G", "I", "J", "K")}
+    estilos["J6"] = _copy(ws["J6"]._style)  # estilo de la fila de totales
+    estilos["K6"] = _copy(ws["K6"]._style)
+
+    # Los 0 de ejemplo del costo (P.Com.Uni, Factor) van en blanco: el usuario
+    # los captura a mano después y las fórmulas de precio dan 0 solas.
+    for col in ("E", "F", "H"):
+        ws[f"{col}3"] = None
+
+    # Totales: el template trae =SUM(J3:J3) en la fila 6. Si los totales NO
+    # caen ahí (distinto número de reportes), se limpia ANTES de escribir los
+    # datos para no dejar SUM viejos… y sin borrar después las fórmulas que
+    # el propio loop deja en J6/K6 cuando la fila 6 resulta ser un dato (n ≥ 4).
+    ultima = 2 + len(reportes)
+    fila_tot = ultima + 1
+    if fila_tot != 6:
+        ws["J6"] = None
+        ws["K6"] = None
+
+    for idx, r in enumerate(reportes, start=1):
+        fila = 2 + idx  # los datos empiezan en la 3 (la 2 son los encabezados)
+        desc = (r.get("DescripcionServicio") or "").strip()
+        ws[f"A{fila}"] = idx
+        ws[f"B{fila}"] = _horas(r)
+        ws[f"C{fila}"] = f"{r['Folio']} · {desc}" if desc else str(r["Folio"])
+        # Fórmulas de precio del formato, replicadas hacia abajo como si se
+        # arrastrara la fila 3: quedan en 0 hasta que capturen costo/precio.
+        ws[f"G{fila}"] = f"=F{fila}*B{fila}"
+        ws[f"I{fila}"] = f"=F{fila}*(1+H{fila})"
+        ws[f"J{fila}"] = f"=I{fila}*B{fila}"
+        ws[f"K{fila}"] = f"=J{fila}-G{fila}"
+        for col in ("A", "B", "C", "G", "I", "J", "K"):
+            ws[f"{col}{fila}"]._style = estilos[col]
+
+    # Fila de totales contra el rango real de datos (fila justa debajo).
+    ws[f"J{fila_tot}"] = f"=SUM(J3:J{ultima})"
+    ws[f"K{fila_tot}"] = f"=SUM(K3:K{ultima})"
+    ws[f"J{fila_tot}"]._style = estilos["J6"]
+    ws[f"K{fila_tot}"]._style = estilos["K6"]
+
+    # --- Nombre genérico del archivo: Reportes_<Cliente>_AAAA-MM-DD.xlsx ----
+    cliente = next(iter(clientes)) or "Cliente"
+    nombre_cliente = unicodedata.normalize("NFKD", cliente).encode("ascii", "ignore").decode()
+    nombre_cliente = re.sub(r"[^\w\s-]", "", nombre_cliente).strip().replace(" ", "_")[:40] or "Cliente"
+    nombre = f"Reportes_{nombre_cliente}_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
 @app.get("/api/reportes/{id_reporte}")
 async def api_get_reporte(id_reporte: int, current_user: dict = Depends(get_current_user)):
     _require_reporte(current_user)
