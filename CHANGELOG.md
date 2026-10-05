@@ -3,6 +3,35 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.6.3] - 2026-10-05
+
+### Corregido
+- **📦 Cotizaciones Materiales ya no tarda 26 s ni marca la app como "Sin conexión".**
+  Dos problemas encadenados, los dos en el mismo par de endpoints
+  (`GET /api/cotizaciones/resumen` y `GET /api/sync/pull`):
+  - **La consulta**: usaban la vista `vw_ResumenCotizaciones`, que hace
+    `GROUP BY I.Descripcion`. Esa columna es `varchar(max)`, y agrupar por una
+    LOB cuesta ~26 s en SQL Server. Con un tope de 100 filas la misma consulta
+    baja a milisegundos, así que además se topó el listado.
+  - **El congelamiento**: ambos endpoints eran `async def` con pymssql
+    **síncrono**, así que esas 26 s detenían el event loop de uvicorn. Con el
+    loop ocupado, el ping a `/api/health` que hace el front tardaba 12 s y el
+    front, con su timeout de 5 s, se declaraba "Sin conexión" y pintaba los
+    datos guardados. `/api/sync/pull` se dispara en el prefetch del login, así
+    que además **congelaba la app al iniciar sesión**. Los dos endpoints ahora
+    son `def` y FastAPI los corre en el threadpool: aunque una consulta se
+    ponga lenta ya no puede tumbar al servidor ni provocar un falso "Sin
+    conexión".
+- **Importes inflados al doble en el listado.** La vista hace
+  `LEFT JOIN Clientes` y `Clientes` tiene 7 `IdCliente` repetidos (ATTC, Dail,
+  GRMA, IJDM, ISAL, LEOS, SSMT), de modo que cada partida se contaba dos veces.
+  El folio CM01135 se mostraba con total $20,114.55 cuando sus partidas suman
+  $9,270.06. El detalle y el PDF leen `Partidas` directo, o sea que el listado
+  mostraba una cifra que el PDF no respaldaba. El agregado ahora sale de
+  `Partidas` sin pasar por `Clientes`, y coincide con el detalle y el PDF.
+- El nuevo listado calcula el agregado de partidas **solo para los folios que
+  devuelve** en vez de agrupar la tabla entera y descartar mil resultados.
+
 ## [1.6.2] - 2026-10-01
 
 ### Corregido

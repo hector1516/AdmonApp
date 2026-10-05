@@ -1469,27 +1469,122 @@ class ClienteUpdate(BaseModel):
 
 # ----- Índice / encabezado -----
 
+# Cuántas cotizaciones trae el listado. Ojo: este tope NO es el que arregla la
+# lentitud (eso era el GROUP BY sobre una columna varchar(max), ver la nota del
+# endpoint). Es un tope de tamaño de la respuesta: con 1 203 cotizaciones el
+# navegador tenía que pintar más de mil tarjetas.
+#
+# Si se baja de ~300, ojo con el buscador de la pantalla: filtra del lado del
+# cliente sobre lo que llegó, así que un tope chico esconde de la búsqueda las
+# cotizaciones más viejas. Si se quiere tope chico de verdad, el buscador tiene
+# que pasar al servidor (parámetro de folio/cliente/texto).
+TOP_COTIZACIONES = 100
+
+# Etiquetas de estatus por el campo Color de IndiceMateriales. La vista
+# `vw_ResumenCotizaciones` hacía este mismo CASE; aquí se resuelve en Python
+# para no depender de ella (ver la nota de abajo).
+_ESTATUS_COLOR = {0: "PENDIENTE", 1: "ENTREGADA", 2: "PAGADA"}
+
+
+def _listar_cotizaciones(conn, top: int = TOP_COTIZACIONES) -> list:
+    """Listado de cotizaciones de materiales (compartido por dos endpoints).
+
+    POR QUÉ NO SE USA LA VISTA `vw_ResumenCotizaciones`:
+    esa vista hace `GROUP BY I.Descripcion`, que es varchar(max), una columna
+    LOB; agrupar por una LOB cuesta ~26 s en SQL Server. Los índices no lo
+    arreglan y no se crea ninguno: el problema es el tipo de la columna, no la
+    falta de índice. Además la vista se equivocaba en los importes: hace
+    `LEFT JOIN Clientes` y `Clientes` tiene 7 `IdCliente` repetidos (ATTC,
+    Dail, GRMA, IJDM, ISAL, LEOS, SSMT), así que cada partida se contaba dos
+    veces y el total salía al doble. El detalle y el PDF leen `Partidas` de
+    forma directa, o sea que el listado mostraba una cifra que el PDF no
+    respaldaba. Aquí el agregado sale de `Partidas` solo: la misma que usan el
+    detalle y el PDF.
+
+    Aquí van dos consultas baratas —encabezado y suma de partidas de esos
+    folios— combinadas en Python: ~0.3 s.
+
+    Los importes se calculan igual que en la vista:
+      SumaPartidas = SUM((PrecioCompraUnitario * (1 + Factor)) * Cantidad)
+      Flete        = MAX(Flete)
+      Subtotal     = SumaPartidas + Flete
+      IVA          = Subtotal * 0.16
+      TotalFinal   = Subtotal * 1.16
+    """
+    cursor = conn.cursor(as_dict=True)
+
+    # 1) Encabezados: sin GROUP BY y sin la vista, así que no toca la LOB.
+    #    Con TOP grande esta consulta se dragged por el LOB, por eso el tope.
+    cursor.execute(
+        "SELECT TOP %d I.Folio, I.IdCliente, ISNULL(C.Cliente, '') AS Cliente, "
+        "I.Contacto, I.Fecha, I.Descripcion, I.Autor, I.Color "
+        "FROM IndiceMateriales I LEFT JOIN Clientes C ON I.IdCliente = C.IdCliente "
+        "ORDER BY I.Folio DESC", (top,)
+    )
+    cabeceras = cursor.fetchall()
+
+    # 2) Suma de partidas SOLO de las cotizaciones que se devuelven.
+    #    Antes se agregaba la tabla entera (1 179 folios) y se descartaban más
+    #    de mil: con `Partidas` sin índice es un GROUP BY completo, y con la
+    #    base en frío llegó a tardar 20 s. Filtrar por la lista de folios deja
+    #    el trabajo en unas 200 filas.
+    folios = [r["Folio"] for r in cabeceras]
+    agg = {}
+    if folios:
+        # pymssql no admite `?` ni listas expandidas: se interpolan los folios,
+        # que vienen de la BD como numéricos.
+        lista = ",".join(str(int(f)) for f in folios)
+        cursor.execute(
+            "SELECT Folio, SUM((PrecioCompraUnitario * (1.0 + Factor)) * Cantidad) AS Suma, "
+            f"ISNULL(MAX(Flete), 0) AS Flete FROM Partidas "
+            f"WHERE Folio IN ({lista}) GROUP BY Folio"
+        )
+        agg = {r["Folio"]: (r["Suma"], r["Flete"]) for r in cursor.fetchall()}
+
+    salida = []
+    for r in cabeceras:
+        folio = r["Folio"]
+        suma, flete = agg.get(folio, (0, 0))
+        suma = float(suma or 0)
+        flete = float(flete or 0)
+        subtotal = suma + flete
+        salida.append({
+            "folio": folio, "folio_fmt": _fmt_folio(folio),
+            "id_cliente": r["IdCliente"] or "", "cliente": r["Cliente"] or "",
+            "contacto": r["Contacto"] or "", "fecha": _fstr(r["Fecha"]),
+            "descripcion": r["Descripcion"] or "", "autor": r["Autor"] or "",
+            "estatus": _ESTATUS_COLOR.get(int(r["Color"] or 0), "DESCONOCIDO"),
+            "suma_partidas": _fnum(suma), "flete": _fnum(flete),
+            "subtotal": _fnum(subtotal), "iva": _fnum(subtotal * 0.16),
+            "total": _fnum(subtotal * 1.16),
+        })
+    return salida
+
+
 @app.get("/api/cotizaciones/resumen")
-async def cotizaciones_resumen(current_user: dict = Depends(get_current_user)):
+def cotizaciones_resumen(current_user: dict = Depends(get_current_user)):
+    """Listado de cotizaciones de materiales para la pantalla principal.
+
+    Es `def` y no `async def` a propósito: FastAPI corre los `def` en su
+    threadpool, así que aunque una consulta se ponga lenta ya no bloquea el
+    event loop de uvicorn. Antes sí lo bloqueaba, y con el loop ocupado el
+    ping a /api/health del front tardaba 12 s y la app entera se anunciaba
+    "Sin conexión" con datos viejos.
+    """
     _require_cotiz(current_user)
+    conn = None
     try:
         conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT TOP 999 Folio, IdCliente, Cliente, Contacto, Fecha, DescripcionGeneral, "
-            "Autor, Estatus, SumaPartidas, FleteCotizacion, Subtotal, IVA, TotalFinal "
-            "FROM vw_ResumenCotizaciones ORDER BY Folio DESC"
-        )
-        rows = cursor.fetchall()
+        salida = _listar_cotizaciones(conn)
         conn.close()
-        return [{
-            "folio": r[0], "folio_fmt": _fmt_folio(r[0]),
-            "id_cliente": r[1] or "", "cliente": r[2] or "", "contacto": r[3] or "",
-            "fecha": _fstr(r[4]), "descripcion": r[5] or "", "autor": r[6] or "",
-            "estatus": r[7] or "", "suma_partidas": _fnum(r[8]), "flete": _fnum(r[9]),
-            "subtotal": _fnum(r[10]), "iva": _fnum(r[11]), "total": _fnum(r[12]),
-        } for r in rows]
+        conn = None
+        return salida
     except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
@@ -2572,27 +2667,35 @@ async def sync_push(body: SyncPushRequest, current_user: dict = Depends(get_curr
 
 
 @app.get("/api/sync/pull")
-async def sync_pull(current_user: dict = Depends(get_current_user)):
+def sync_pull(current_user: dict = Depends(get_current_user)):
+    """Descarga para la caché offline (cotizaciones + clientes).
+
+    Este endpoint corría en el prefetch que dispara el login, y usaba la misma
+    consulta lenta de 999 filas de la vista: entrar a la app congelaba el
+    servidor ~26 s. Reusa el listado ya corregido y, como es `def`, no bloquea
+    el event loop.
+    """
     _require_cotiz(current_user)
+    conn = None
     try:
         conn = get_connection()
+        cots = [{"folio": r["folio"], "id_cliente": r["id_cliente"], "cliente": r["cliente"],
+                 "contacto": r["contacto"], "fecha": r["fecha"], "descripcion": r["descripcion"],
+                 "autor": r["autor"], "estatus": r["estatus"], "suma_partidas": r["suma_partidas"],
+                 "flete": r["flete"], "subtotal": r["subtotal"], "iva": r["iva"], "total": r["total"]}
+                for r in _listar_cotizaciones(conn)]
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT TOP 999 Folio, IdCliente, Cliente, Contacto, Fecha, DescripcionGeneral, "
-            "Autor, Estatus, SumaPartidas, FleteCotizacion, Subtotal, IVA, TotalFinal "
-            "FROM vw_ResumenCotizaciones ORDER BY Folio DESC"
-        )
-        cots = [{
-            "folio": r[0], "id_cliente": r[1] or "", "cliente": r[2] or "", "contacto": r[3] or "",
-            "fecha": _fstr(r[4]), "descripcion": r[5] or "", "autor": r[6] or "",
-            "estatus": r[7] or "", "suma_partidas": _fnum(r[8]), "flete": _fnum(r[9]),
-            "subtotal": _fnum(r[10]), "iva": _fnum(r[11]), "total": _fnum(r[12]),
-        } for r in cursor.fetchall()]
         cursor.execute("SELECT IdCliente, Cliente, CondicionesPagoDias FROM clientes ORDER BY IdCliente ASC")
         clis = [{"id_cliente": r[0], "nombre": r[1], "dias_pago": r[2]} for r in cursor.fetchall()]
         conn.close()
+        conn = None
         return {"cotizaciones": cots, "clientes": clis}
     except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
