@@ -6,27 +6,27 @@ Runbook de despliegue de `admon` (la PWA en `admon.ecc-sa.com.mx`). Repo: **hect
 ## Topología
 
 - Contenedor `admon` → imagen `hub-admon:latest`, puerto host `8103` → `8000` interno.
-- Directorio de build en el ServerVM: **`C:\admon`** (clon de AdmonApp; ahí queda también `build.log`).
-- La red es `hub_default` y monta el volumen `hubmail_data:/data`.
-- **El contenedor no monta `C:\admon`**: el código entra a la imagen durante el `docker build`.
-  Editar archivos dentro del contenedor es un error (ver "Verificar qué está vivo" más abajo).
+- Servidor: **WebbApps, Debian, `10.188.141.17`** (el ServerVM `10.188.141.31` ya no publica la app).
+- Config del contenedor: **`/opt/apps/admon/app.conf`** en el servidor, aplicada con
+  `/opt/apps/_lib/run_app.sh`. Secretos en `/etc/admon.env` (root, 600). Nada de eso está en el repo.
+- Red `hub_default`. **El contenedor NO monta volúmenes**: el código entra a la imagen
+  durante el `docker build` (o por `docker cp` en el hotsync). Editar archivos dentro del
+  contenedor a mano es un error: el siguiente deploy lo pisa.
 
-## Flujo canónico (un comando)
+## Flujo canónico
 
-```powershell
-# 1. Build + deploy (pull, npm build, docker build, recrear contenedor, health, rollback si falla)
-powershell -ExecutionPolicy Bypass -File C:\admon\deploy\build.ps1
+```bash
+# en WebbApps (10.188.141.17), como root
+sudo /opt/apps/_lib/run_app.sh admon      # recrea el contenedor desde app.conf
+docker logs -f admon
 
-# o, una vez registrada la tarea (deploy/register_task.ps1, una sola vez):
-schtasks /run /tn AdmonBuild
-Get-Content C:\admon\build.log -Wait      # termina con "FIN rc=0" o "FIN rc=1"
+# deploy rápido sin rebuild (equivale al hotsync del CI)
+sudo -u deploy bash deploy/hotsync-linux.sh
+sudo -u deploy bash deploy/hotsync-linux.sh --dry-run
 ```
 
-`build.ps1` hace: `git pull --ff-only` → `npm ci` → `npm run build` → `docker build -t hub-admon:sat01`
-→ retag (`rollback`←`latest` anterior, `latest`/`legends`←`sat01`) → recrear el contenedor
-**leyendo su config actual con `docker inspect`** (env con credenciales, puertos, binds, red,
-restart policy; nunca hardcodeados) → health check en `http://localhost:8103/api/health` →
-si falla, rollback automático al contenedor anterior.
+Normalmente no hace falta ninguno de los dos: **el deploy es automático** en
+cada push a `master` (ver abajo).
 
 ## Tags de imagen
 
@@ -92,20 +92,22 @@ archivos** cambió:
 
 | Modo | Cuándo | Qué hace | Tiempo |
 |---|---|---|---|
-| **hotsync** | No cambió `Dockerfile`, `requirements.txt` ni `api/requirements.txt` | Compila el frontend en un `node:20-alpine` **descartable** y copia `dist/` + `api/` al contenedor que ya corre | segundos |
-| **rebuild** | Cambió alguno de esos | Lanza `schtasks /run /tn AdmonBuild`, que reconstruye la imagen y hace rollback si falla | minutos |
+| **hotsync** | No cambió `Dockerfile`, `requirements.txt` ni `api/requirements.txt` | Compila el frontend en un `node:20-alpine` **descartable** y copia `dist/` + `api/` al contenedor que ya corre, y lo reinicia (`deploy/hotsync-linux.sh`) | ~2 min |
+| **rebuild** | Cambió alguno de esos | `docker build` de `hub-admon:latest` y recreación del contenedor con `/opt/apps/_lib/run_app.sh` (`deploy/rebuild-linux.sh`) | ~4 min |
 
 El hotsync **no reconstruye la imagen**: por eso compila dentro de un
-contenedor y no en el host (el ServerVM no tiene node, ver `16bfa49`).
+contenedor y no en el host (WebbApps no tiene node).
 
 Para verlo sin ejecutar nada:
 
 ```bash
-bash deploy/hotsync.sh --dry-run
+bash deploy/hotsync-linux.sh --dry-run
 ```
 
-El rebuild va por `schtasks` y no por SSH porque Windows mata los procesos
-hijos al cerrarse la sesión.
+El gate corre en `ubuntu-latest` y el deploy en el runner de WebbApps
+(`admon-deploy`). Antes el pipeline corría en un runner Windows del ServerVM
+con PowerShell, `C:\admon` y una tarea programada: daba `success` sin publicar
+nada, porque ese servidor dejó de servir la app.
 
 **El primer deploy con el workflow conviene vigilarlo**: antes todo era manual.
 Los dos caminos dicen en el log qué modo eligieron y por qué.

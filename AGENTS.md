@@ -72,19 +72,46 @@ Al sacar una versión, en este orden:
 
 ## Deploy
 
-`deploy.yml` dispara en cada push a `master` y decide:
+La app vive en **WebbApps** (`10.188.141.17`, Debian): contenedor `admon`,
+imagen `hub-admon:latest`, puerto host `8103` → `8000` interno. Ya NO se
+despliega en el ServerVM (10.188.141.31); ese pipeline quedó como un éxito
+falso, porque GitHub reportaba `success` y la app no cambiaba.
+
+`deploy.yml` dispara en cada push a `master`:
+
+1. El **gate** corre en `ubuntu-latest` (bash): compara contra el push anterior
+   con la API de GitHub y decide el modo. Que no dependa del runner es
+   deliberado: si el gate necesita un runner, no puede avisar que falta.
+2. El **deploy** corre en el runner `WebbApps-Runner` (Linux, etiqueta
+   `admon-deploy`, servicio systemd `actions-runner-admonapp`). Se pide esa
+   etiqueta y no `self-hosted` porque en este repo todavía hay un runner
+   Windows registrado y con `self-hosted` el job caería ahí.
+
+Modos:
 
 - **hotsync** — no cambió nada de la imagen: compila el frontend en un
   contenedor `node:20-alpine` descartable y copia `dist/` y `api/` al
-  contenedor que ya corre. Segundos. `deploy/hotsync.sh` (tiene `--dry-run`).
+  contenedor que ya corre, luego lo reinicia. ~2 min.
+  `deploy/hotsync-linux.sh` (tiene `--dry-run`).
 - **rebuild** — cambió `Dockerfile`, `requirements.txt` o `api/requirements.txt`:
-  lanza `schtasks /run /tn AdmonBuild`, que reconstruye y hace rollback si falla.
+  compila el front, arma el contexto, `docker build` y recrea el contenedor con
+  `/opt/apps/_lib/run_app.sh`. ~4 min. `deploy/rebuild-linux.sh`.
 
-**El ServerVM no tiene node instalado** (ver commit `16bfa49`): por eso el
-build del frontend va dentro del contenedor, no en el host.
+**El host no tiene node instalado**: por eso el build del frontend va dentro
+de un contenedor, no en el host. El contenedor node corre con el usuario del
+runner (`--user`), porque como root dejaba archivos que el runner no podía
+borrar y la limpieza fallaba.
+
+La configuración del contenedor (puertos, red, credenciales) **no está en este
+repo**: sale de `/opt/apps/admon/app.conf` en el servidor y la aplica
+`/opt/apps/_lib/run_app.sh`. El env con secretos está en `/etc/admon.env`
+(root, 600). El runner tiene sudo sin password solo para `run_app.sh`,
+`verify_app.sh` y el helper `admon-set-secret`: nunca para leer el env.
 
 El backend corre **uvicorn como PID 1**, sin supervisor: para que cargue código
-nuevo hay que reiniciar el contenedor, no un programa de supervisor.
+nuevo hay que reiniciar el contenedor, no un programa de supervisor. Y
+`docker restart` **no** recarga el env: para cambiar una variable hay que
+recrear el contenedor.
 
 ## Base de datos
 

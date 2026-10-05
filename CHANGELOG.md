@@ -20,6 +20,16 @@
   env-file: el runner tiene sudo para ese script, no para el archivo, y así no
   puede leer las credenciales de la base de datos.
 
+### Verificado
+- El camino **REBUILD** del pipeline se probó de punta a punta (tocando
+  `requirements.txt` a propósito): compiló el front, `docker build` en 45 s,
+  recreó el contenedor por `/opt/apps/_lib/run_app.sh` yy quedó en salud a los
+  2 s. El camino hotsync también, varias veces. Los dos  dos fallos
+  aparecieron al probarlos de verdad, no al leer el YAML: `npm ci` corría sobre
+  el montaje de solo lectura, y una línea de comentario sin `#` en `app.conf`
+  rompía el `source` (el conf se carga con `source`, así que un comentario mal
+  puesto es un error de sintaxis).
+
 ### Cambiado
 - **`APP_AUTO_START=1` en `/opt/apps/admon/app.conf`.** Estaba en 0 porque WebbApps
   no tenía RAM para esta app (154 MB). Hoy hay memoria de sobra y la app está en
