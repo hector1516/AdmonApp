@@ -1,88 +1,91 @@
-name: Aplicar HUB_PANEL_TOKEN (recrea el contenedor)
-
-# El control remoto de la TV necesita HUB_PANEL_TOKEN en el ENV del contenedor
-# `admon`. Un env no se puede mutar en caliente: hay que recrear el contenedor,
-# y recrearlo lo hace la tarea programada AdmonBuild (deploy/build.ps1), que es
-# un proceso de OTRA sesión de Windows — por eso no alcanza con que este
-# workflow tenga el secret en su entorno.
+# ─────────────────────────────────────────────────────────────────────────────
+# Admon · rotar el HUB_PANEL_TOKEN en WebbApps
 #
-# Este workflow hace el trinquete completo:
-#   1) deposita el secret en C:\admon\.secrets\panel_token (fuera de git),
-#   2) dispara la tarea AdmonBuild, que recrea el contenedor leyéndolo de ahí,
-#   3) deja el resultado en build.log.
+# Para qué: ese secret es el que comparten Admon y el kiosco Dashboard. Cuando
+# se regenera en GitHub hay que llevarlo al servidor, y al contenedor que lo
+# usa.
 #
-# Uso: GitHub → Actions → "Aplicar HUB_PANEL_TOKEN" → Run workflow.
-# Normally NO hace falta: el deploy de cada push ya inyecta el token si viene en
-# el secret. Este workflow es para (re)aplicarlo sin hacer push.
+# ANTES: este workflow depositaba el secret en `C:\admon\.secrets\panel_token`
+# para que build.ps1 lo leyera, en el ServerVM Windows (10.188.141.31). Ese
+# servidor ya no publica la app y el workflow escribía en un sitio donde nada lo
+# leía. Ahora el secret vive en `/etc/admon.env` en WebbApps (10.188.141.17), que
+# es lo que lee `/opt/apps/_lib/run_app.sh` al crear el contenedor.
+#
+# El valor NUNCA se imprime, ni en el log del job ni en el repo.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Aplicar HUB_PANEL_TOKEN
 
 on:
   workflow_dispatch:
     inputs:
       motivo:
-        description: 'Motivo (queda en el log del workflow)'
+        description: 'Por qué se rota el token (queda en el log del job)'
         required: false
-        default: 'aplicar / reaplicar HUB_PANEL_TOKEN al contenedor'
+        default: 'rotación manual'
 
 permissions:
   contents: read
 
 jobs:
   aplicar:
-    runs-on: self-hosted
-    timeout-minutes: 30
+    # Etiqueta del runner de WebbApps (Linux). Con `self-hosted` este job
+    # caería en el runner Windows viejo, que ya no sirve para nada.
+    runs-on: admon-deploy
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Depositar HUB_PANEL_TOKEN
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
+      - name: Estado previo (sin el valor)
+        run: |
+          set -euo pipefail
+          echo "motivo: ${{ inputs.motivo }}"
+          echo "── /etc/admon.env"
+          sudo -n awk -F= '/^HUB_PANEL_TOKEN=/{print "  HUB_PANEL_TOKEN: presente (" length($2) " caracteres)"}' /etc/admon.env \
+            || echo "  HUB_PANEL_TOKEN: NO está en /etc/admon.env (se agrega)"
+          echo "── contenedor admon"
+          sudo -n docker inspect admon --format '  {{.State.Status}} · {{.Config.Image}}'
+          if sudo -n docker inspect admon --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^HUB_PANEL_TOKEN='; then
+            echo "  HUB_PANEL_TOKEN en el contenedor: presente"
+          else
+            echo "  HUB_PANEL_TOKEN en el contenedor: AUSENTE"
+          fi
+
+      - name: Depositar el token en /etc/admon.env
         env:
           PANEL_TOKEN: ${{ secrets.HUB_PANEL_TOKEN }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host ("motivo: " + '${{ inputs.motivo }}')
-          if (-not $env:PANEL_TOKEN) {
-            throw 'secrets.HUB_PANEL_TOKEN viene vacio en este repo'
-          }
-          $dir = 'C:\admon\.secrets'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Set-Content -Path "$dir\panel_token" -Value $env:PANEL_TOKEN -Encoding ascii -NoNewline
-          Write-Host ('OK · depositado en {0}\panel_token' -f $dir)
+          set -euo pipefail
+          if [ -z "$PANEL_TOKEN" ]; then
+            echo "::error::secrets.HUB_PANEL_TOKEN viene vacío en este repo"
+            exit 1
+          fi
+          # El valor va por una variable de entorno, nunca en la línea de
+          # comandos: así no aparece en la lista de procesos del servidor.
+          # `admon-set-secret` es un helper de root que reescribe una sola clave
+          # del env-file; sin él el runner no puede tocar un archivo root.
+          sudo -n admon-set-secret HUB_PANEL_TOKEN "$PANEL_TOKEN"
+          sudo -n awk -F= '/^HUB_PANEL_TOKEN=/{print "  depositado (" length($2) " caracteres)"}' /etc/admon.env
 
-      - name: Estado previo de C:\admon
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
+      - name: Recrear el contenedor para que reciba el token
         run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host ('HEAD  : ' + (git -C C:\admon rev-parse --short HEAD))
-          $dirty = git -C C:\admon status --porcelain
-          Write-Host ('sucio : ' + $(if ($dirty) { (($dirty | Select-Object -First 5) -join '; ') } else { 'no' }))
-          $b = 'C:\admon\deploy\build.ps1'
-          Write-Host ('build.ps1 tiene node:20-alpine : ' + (Select-String -Path $b -Pattern 'node:20-alpine' -Quiet))
-          Write-Host ('build.ps1 tiene ruta absoluta token : ' + (Select-String -Path $b -Pattern "C:\\admon\\.secrets" -Quiet))
-          $dist = Get-ChildItem 'C:\admon\dist\assets\index-*.js' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($dist) { Write-Host ('dist : ' + $dist.Name + '  ' + $dist.LastWriteTime) } else { Write-Host 'dist : NO EXISTE' }
+          set -euo pipefail
+          # `docker restart` NO recarga el env: las variables se fijan al crear
+          # el contenedor, así que hay que recrearlo.
+          sudo -n /opt/apps/_lib/run_app.sh admon
+          sudo -n docker start admon >/dev/null 2>&1 || true
 
-      - name: Recrear el contenedor (AdmonBuild)
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
+      - name: Verificar
         run: |
-          $ErrorActionPreference = 'Stop'
-          $logPath = 'C:\admon\build.log'
-          if (Test-Path $logPath) { Move-Item $logPath "$logPath.prev" -Force }
-          schtasks /run /tn AdmonBuild
-          if ($LASTEXITCODE -ne 0) { throw 'no se pudo lanzar AdmonBuild' }
-          $rc = $null
-          for ($i = 0; $i -lt 90; $i++) {
-            Start-Sleep -Seconds 10
-            $log = Get-Content $logPath -ErrorAction SilentlyContinue
-            $line = $log | Select-String 'FIN rc=(\d+)' | Select-Object -Last 1
-            if ($line) {
-              # Se imprime bastante del build.log: el paso 2 (compilación del
-              # frontend) y el docker run son los que hay que poder auditar en
-              # este workflow sin volver a lanzarlo.
-              Get-Content $logPath -Tail 120 | ForEach-Object { Write-Host $_ }
-              $rc = [int]$line.Matches[0].Groups[1].Value
-              break
-            }
-          }
-          if ($null -eq $rc) { throw 'AdmonBuild no escribio FIN rc= a tiempo' }
-          if ($rc -ne 0) { throw "AdmonBuild termino con rc=$rc" }
-          Write-Host 'Contenedor recreado con el token aplicado.'
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8103/health || true)
+            if [ "$CODE" = "200" ]; then
+              echo "  salud OK (intento $i)"
+              sudo -n docker inspect admon --format '  {{.State.Status}}'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::admon no respondió en /health después de 60 s"
+          sudo -n docker logs --tail 40 admon
+          exit 1

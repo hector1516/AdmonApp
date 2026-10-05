@@ -3,6 +3,32 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.7.2] - 2026-10-05
+
+### Corregido
+- **🖼️ La pantalla de portada apuntaba al servidor muerto.** El valor por defecto
+  de `HUB_PANEL_URL` en `api/notas_pantalla.py` era `10.188.141.31:8101`
+  (ServerVM). El kiosco `dashboard` se mudó a WebbApps (10.188.141.17:8101) y
+  ese servidor ya no responde, así que la pantalla estaba rota sin que saltara
+  ninguna alarma: el error se veía como un 404 del kiosco.
+- **El workflow del panel token escribía donde nadie leía.** Depositaba el
+  secret en `C:\admon\.secrets\panel_token` del ServerVM Windows, que era el
+  camino del `build.ps1` viejo. Ahora rota `HUB_PANEL_TOKEN` en
+  `/etc/admon.env` de WebbApps (lo que lee `/opt/apps/_lib/run_app.sh`) y
+  recrea el contenedor, porque `docker restart` NO recarga el env.
+  Se agrega `admon-set-secret`, un helper de root que escribe una sola clave del
+  env-file: el runner tiene sudo para ese script, no para el archivo, y así no
+  puede leer las credenciales de la base de datos.
+
+### Cambiado
+- **`APP_AUTO_START=1` en `/opt/apps/admon/app.conf`.** Estaba en 0 porque WebbApps
+  no tenía RAM para esta app (154 MB). Hoy hay memoria de sobra y la app está en
+  servicio; dejarlo en `created` hacía que cada rebuild la apagara y había que
+  arrancarla a mano.
+- Se eliminan `deploy/build.ps1`, `deploy/hotsync.sh` y `deploy/register_task.ps1`:
+  eran del camino Windows (PowerShell, `C:\admon`, tarea programada `AdmonBuild`).
+  Este repo ya no los usa; quedan en el historial de git.
+
 ## [1.7.1] - 2026-10-05
 
 ### Corregido

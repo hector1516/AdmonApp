@@ -28,11 +28,15 @@ import os
 
 import pymssql
 
-# Secret compartido con el contenedor del Dashboard (C:\\Dashboard\\deploy\\env.local).
-# Viene como variable de entorno; NUNCA se hardcodea ni se escribe en el código.
-# Sin ella el kiosco devuelve 403 y la app lo reporta en vez de fallar en silencio.
+# Secret compartido con el contenedor del Dashboard. Viene como variable de
+# entorno; NUNCA se hardcodea ni se escribe en el código. Sin ella el kiosco
+# devuelve 403 y la app lo reporta en vez de fallar en silencio.
 PANEL_TOKEN = os.getenv("HUB_PANEL_TOKEN", "")
-PANEL_URL = os.getenv("HUB_PANEL_URL", "http://10.188.141.31:8101")
+# OJO con el default: el kiosco (contenedor `dashboard`) se mudó a WebbApps
+# (10.188.141.17, puerto 8101) junto con Admon. Este valor apuntaba al ServerVM
+# viejo (10.188.141.31), que ya no responde, así que la pantalla de portada
+# estaba rota sin que nadie lo notara: el error salía como 404 del kiosco.
+PANEL_URL = os.getenv("HUB_PANEL_URL", "http://10.188.141.17:8101")
 
 CLAVE_PORTADA = "PORTADA"
 
