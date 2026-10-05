@@ -49,3 +49,4 @@ openpyxl==3.1.5
 # --- IA (mandato, sin pin en las 3 apps) ------------------------------------
 google-generativeai
 google.ai.generativelanguage
+# prueba de rebuild del pipeline (se quita en el siguiente push)
