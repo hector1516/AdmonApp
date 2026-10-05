@@ -4,6 +4,7 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { header, actualizar } from '$lib/cotizacionesApi.js';
 	import { COLOR_LABEL, folioFmt } from '$lib/cotizaciones.js';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	// Cambio rápido de estatus (los 3 colores del HUB).
 
@@ -21,6 +22,12 @@
 	let error = $state('');
 	let msg = $state('');
 	let busy = $state(false);
+
+	// Solo hay 3 estatus, así que la paginación nunca se dibuja; se deja el
+	// corte por si mañana la lista crece (mismo patrón que el resto del HUB).
+	const POR_PAGINA = 100;
+	let pagina = $state(1);
+	const pagActual = $derived(OPCIONES.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA));
 
 	function tieneAcceso() {
 		try {
@@ -86,7 +93,7 @@
 		<div class="card"><p style="color: var(--color-danger); margin: 0;">{error}</p></div>
 	{:else if h}
 		<div class="list">
-			{#each OPCIONES as op}
+			{#each pagActual as op}
 				<button
 					class="list-card estatus-opt"
 					class:sel={parseInt(sel, 10) === op.color}
@@ -102,6 +109,7 @@
 					{/if}
 				</button>
 			{/each}
+			<Paginacion total={OPCIONES.length} bind:pagina porPagina={POR_PAGINA} etiqueta="estatus" />
 		</div>
 
 		{#if error}

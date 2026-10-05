@@ -60,36 +60,59 @@ const folioKeyOf = (row) => (row.folio ?? row.idLocal);
 
 // ---- Lecturas ----
 
-export async function listar() {
+/**
+ * Listado de cotizaciones, de 100 en 100.
+ *
+ * La paginación va en el servidor porque son más de mil cotizaciones y pedir
+ * todas de golpe hacía que SQL Server leyera cientos de páginas de la columna
+ * `Descripcion` (que es varchar(max)); con el caché en frío eso tardaba 25 s y
+ * la app entera se iba con ella.
+ *
+ * Cada página que se visita se guarda en IndexedDB, así que sin conexión se
+ * siguen viendo las páginas ya descargadas. El total sale del servidor; sin
+ * red se usa el conteo de lo que hay en local.
+ */
+export async function listar({ pagina = 1, porPagina = 100, q = '' } = {}) {
+	let total = 0;
+	// Folios de la página que trajo el servidor. La pantalla debe pintar SOLO
+	// estos: la caché local va guardando todas las páginas que se han visitado,
+	// y si se devolviera el caché entero se acumularían las tarjetas (la página
+	// 2 llegaba con las 200 de las páginas 1 y 2 juntas).
+	let foliosDeLaPagina = null;
 	if (isOnline()) {
 		try {
-			const rows = await req('GET', '/api/cotizaciones/resumen');
-			for (const r of rows) {
-				const idLocal = srvKey(r.folio);
+			const params = new URLSearchParams({ pagina: String(pagina), porPagina: String(porPagina) });
+			if (q) params.set('q', q);
+			const r = await req('GET', `/api/cotizaciones/resumen?${params}`);
+			const filas = r.cotizaciones || [];
+			total = r.total ?? filas.length;
+			foliosDeLaPagina = new Set(filas.map((c) => srvKey(c.folio)));
+			for (const c of filas) {
+				const idLocal = srvKey(c.folio);
 				const prev = await db.cotizaciones.get(idLocal);
 				await db.cotizaciones.put({
 					...(prev || {}),
 					idLocal,
-					folio: r.folio,
-					id_cliente: r.id_cliente,
-					cliente: r.cliente,
-					contacto: r.contacto,
-					fecha: r.fecha,
-					descripcion: r.descripcion,
-					autor: r.autor,
-					estatus: r.estatus,
-					suma_partidas: r.suma_partidas,
-					flete: r.flete,
-					subtotal: r.subtotal,
-					iva: r.iva,
-					total: r.total,
+					folio: c.folio,
+					id_cliente: c.id_cliente,
+					cliente: c.cliente,
+					contacto: c.contacto,
+					fecha: c.fecha,
+					descripcion: c.descripcion,
+					autor: c.autor,
+					estatus: c.estatus,
+					suma_partidas: c.suma_partidas,
+					flete: c.flete,
+					subtotal: c.subtotal,
+					iva: c.iva,
+					total: c.total,
 					synced: true,
 					ts: Date.now()
 				});
 			}
 		} catch (e) {
 			if (!isNetworkError(e)) throw e;
-			// cae a caché
+			// sin red: se sirve de la caché local
 		}
 	}
 	const all = await db.cotizaciones.toArray();
@@ -99,7 +122,26 @@ export async function listar() {
 		if (b.folio == null) return 1;
 		return b.folio - a.folio;
 	});
-	return all;
+	if (q) {
+		const t = q.trim().toLowerCase();
+		const f = all.filter((c) =>
+			[c.folio_fmt || folioFmtFallback(c.folio), c.id_cliente, c.cliente, c.contacto, c.autor]
+				.map((v) => String(v || '').toLowerCase())
+				.some((v) => v.includes(t))
+		);
+		return { rows: f, total: total || f.length };
+	}
+	if (foliosDeLaPagina) {
+		const rows = all.filter((c) => foliosDeLaPagina.has(c.idLocal));
+		return { rows, total: total || rows.length };
+	}
+	// Sin conexión el servidor no puede paginar: se corta lo que hay guardado.
+	const desde = (pagina - 1) * porPagina;
+	return { rows: all.slice(desde, desde + porPagina), total: all.length };
+}
+
+function folioFmtFallback(folio) {
+	return folio == null ? '' : `CM${String(folio).padStart(5, '0')}`;
 }
 
 export async function header(folioOrLocal) {

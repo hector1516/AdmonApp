@@ -4,12 +4,14 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
 	import OfflineNotice from '../components/OfflineNotice.svelte';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	// REGISTRO DE REPORTES (Admin) — clon del HUB views/registro_reportes.py
 	// Lista global con pestañas: Firmados / 📊 Excel (exportación) / Papelera
 	// Permiso: acceso_registro_reportes
 
 	let lista = $state([]);
+	let pagina = $state(1);
 	let loading = $state(true);
 	let error = $state('');
 	let msg = $state('');
@@ -58,6 +60,17 @@
 	// Lista visible: la pestaña Excel exporta los MISMOS reportes firmados,
 	// así que reutiliza la lista de la pestaña 🟢 Firmados.
 	let listaTab = $derived(tab === 'papelera' ? papelera : firmados);
+
+	const POR_PAGINA = 100;
+	const pagActual = $derived(listaTab.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA));
+
+	// Buscar o cambiar de pestaña deja al usuario en la primera página; si no,
+	// puede quedarse viendo una página vacía de la lista ya filtrada.
+	$effect(() => {
+		busqueda;
+		tab;
+		pagina = 1;
+	});
 
 	// Total de horas de un reporte: (Fin − Inicio) + TiempoTraslado.
 	// Misma fórmula que usa el backend para la columna B del Excel (2 cifras).
@@ -381,7 +394,7 @@
 		{/snippet}
 
 		<div class="list">
-			{#each listaTab as r (r.IdReporte)}
+			{#each pagActual as r (r.IdReporte)}
 				{#if tab === 'excel'}
 					<label class="list-card">
 						<input
@@ -398,6 +411,7 @@
 					</button>
 				{/if}
 			{/each}
+			<Paginacion total={listaTab.length} bind:pagina porPagina={POR_PAGINA} etiqueta="reportes" />
 		</div>
 	{/if}
 

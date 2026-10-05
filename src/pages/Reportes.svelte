@@ -3,10 +3,12 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { online } from '$lib/stores/online.js';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	// Lista de reportes como el HUB: buscar, filtrar por técnico, crear nuevo.
 
 	let lista = $state([]);
+	let pagina = $state(1);
 	let loading = $state(true);
 	let error = $state('');
 	let msg = $state('');
@@ -36,6 +38,17 @@
 			return matchB && matchT;
 		})
 	);
+
+	const POR_PAGINA = 100;
+	const pagActual = $derived(filtrados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA));
+
+	// Cambiar el buscador o el filtro de ingeniero reinicia la página: con la
+	// lista ya filtrada, si no, se puede quedar viendo una página vacía.
+	$effect(() => {
+		busqueda;
+		filtroTecnico;
+		pagina = 1;
+	});
 
 	async function cargar() {
 		loading = true;
@@ -120,7 +133,7 @@
 		<div class="empty">No hay reportes registrados.</div>
 	{:else}
 		<div class="list">
-			{#each filtrados as r (r.IdReporte)}
+			{#each pagActual as r (r.IdReporte)}
 				<button class="list-card" on:click={() => ver(r)}>
 					<div style="flex: 1;">
 						<div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
@@ -135,6 +148,7 @@
 					</div>
 				</button>
 			{/each}
+			<Paginacion total={filtrados.length} bind:pagina porPagina={POR_PAGINA} etiqueta="reportes" />
 		</div>
 	{/if}
 </div>

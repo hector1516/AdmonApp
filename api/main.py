@@ -10,8 +10,10 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import pymssql
 import os
+import io
 import json
 import base64
+from functools import lru_cache
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -1223,15 +1225,26 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
 # --- Inventory endpoints ---
 
 @app.get("/api/inventory/items")
-async def get_inventory_items(current_user: dict = Depends(get_current_user)):
+def get_inventory_items(current_user: dict = Depends(get_current_user)):
+    """Listado del inventario.
+
+    La columna de llave se llama `IdInventario`, no `Id`: con `Id` la consulta
+    fallaba siempre con "Invalid column name 'Id'" y este endpoint devolvía 500
+    en todas partes. Son 519 ítems, así que la pantalla los pagina de 100 en 100.
+    """
     if not current_user["acceso_inventario"]:
         raise HTTPException(status_code=403, detail="No access")
+    conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Marca, Modelo, Descripcion, Cantidad, StockMinimo, Ubicacion, Proveedor, Precio FROM HUB_Inventario")
+        cursor.execute(
+            "SELECT IdInventario, Marca, Modelo, Descripcion, Cantidad, StockMinimo, "
+            "Ubicacion, Proveedor, Precio FROM HUB_Inventario ORDER BY IdInventario"
+        )
         rows = cursor.fetchall()
         conn.close()
+        conn = None
         items = []
         for row in rows:
             items.append({
@@ -1241,17 +1254,22 @@ async def get_inventory_items(current_user: dict = Depends(get_current_user)):
             })
         return items
     except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @app.get("/api/inventory/items/{item_id:int}")
-async def get_inventory_item(item_id: int, current_user: dict = Depends(get_current_user)):
+def get_inventory_item(item_id: int, current_user: dict = Depends(get_current_user)):
     if not current_user["acceso_inventario"]:
         raise HTTPException(status_code=403, detail="No access")
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT Id, Marca, Modelo, Descripcion, Cantidad, StockMinimo, Ubicacion, Proveedor, Precio FROM HUB_Inventario WHERE Id = %s", (item_id,))
+        cursor.execute("SELECT Id, Marca, Modelo, Descripcion, Cantidad, StockMinimo, Ubicacion, Proveedor, Precio FROM HUB_Inventario WHERE IdInventario = %s", (item_id,))
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -1265,6 +1283,99 @@ async def get_inventory_item(item_id: int, current_user: dict = Depends(get_curr
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+# `clientes` tiene 7 `IdCliente` repetidos (ATTC, Dail, GRMA, IJDM, ISAL, LEOS,
+# SSMT) y no hay ninguna columna que diga cuál es el bueno: son registros viejos
+# conviviendo con los actuales (Dail es 'DAIL' y también 'Sergio Salazar'). Un
+# `LEFT JOIN clientes` a secas multiplica las filas de las 57 cotizaciones de
+# esos clientes: salían duplicadas en el listado y sus importes se sumaban dos
+# veces. Se agrupa por IdCliente y se toma el nombre menor, que al menos es
+# estable entre llamadas. Para arreglarlo de fondo hay que limpiar esas 7
+# filas duplicadas de `clientes`.
+_CLIENTES_UNICOS = (
+    "(SELECT IdCliente, MIN(Cliente) AS Cliente, MIN(CondicionesPagoDias) AS Dias "
+    "FROM clientes GROUP BY IdCliente)"
+)
+
+
+# ── Avatares en miniatura ─────────────────────────────────────────────────────
+# El ranking de Legends traía el avatar EN BASE64 de cada usuario: son PNG de
+# 578×432, entre 150 y 310 KB cada uno, así que la respuesta pesaba 2.5 MB y
+# tardaba 5 s. Los avatares se muestran en 128 px, así que se recortan aquí.
+# La respuesta no cambia de forma (sigue siendo data:image/png;base64), así que
+# el front no se entera.
+#
+# El recorte se memoriza: son siempre los mismos avatares yabrirlos cuesta
+# ~50 ms la primera vez y ~5 ms después.
+# Caché de miniaturas: (IdUsuario, longitud del base64) → miniatura.
+# La longitud sirve de huella barata para detectar un avatar nuevo sin tener que
+# traer el base64 completo (que son 150-310 KB por usuario).
+_THUMBS: dict = {}
+
+
+@lru_cache(maxsize=256)
+def _recortar_avatar(b64: str, lado: int) -> str:
+    """Recorta un avatar base64 a `lado` px."""
+    from PIL import Image
+    crudo = base64.b64decode(b64.split(",", 1)[-1])
+    img = Image.open(io.BytesIO(crudo))
+    img.thumbnail((lado, lado))
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _avatar_thumb(b64: Optional[str], lado: int = 128) -> Optional[str]:
+    """Recorta un avatar base64. Si algo falla devuelve el original."""
+    if not b64:
+        return None
+    try:
+        return _recortar_avatar(b64, lado)
+    except Exception:
+        return b64
+
+
+def _avatares_miniatura(conn, ids: list, lado: int = 128) -> dict:
+    """Miniaturas de varios usuarios, trayendo el base64 solo de los que faltan.
+
+    Así el listado no arrastra 2.5 MB de avatares crudos en cada petición: solo
+    se descargan los que aún no están en caché.
+    """
+    faltan = {}
+    for i in ids:
+        try:
+            largo = _THUMBS_LEN.get(i)
+        except Exception:
+            largo = None
+        if largo and (i, largo) not in _THUMBS:
+            faltan[i] = largo
+    if faltan:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT IdUsuario, AvatarBase64 FROM HUB_UserAvatars WHERE IdUsuario IN ("
+            + ",".join(str(int(i)) for i in faltan) + ")"
+        )
+        for r in cur.fetchall():
+            b64 = r.get("AvatarBase64")
+            if not b64:
+                continue
+            try:
+                _THUMBS[(int(r["IdUsuario"]), len(b64))] = _recortar_avatar(b64, lado)
+            except Exception:
+                pass
+    salida = {}
+    for i in ids:
+        largo = _THUMBS_LEN.get(i)
+        salida[i] = _THUMBS.get((i, largo)) if largo else None
+    return salida
+
+
+# Longitud del base64 de cada avatar con avatar, para poder checar la caché sin
+# traer el contenido. Se llena una vez por petición.
+_THUMBS_LEN: dict = {}
 
 
 # --- Cotizaciones de materiales (réplica exacta del módulo HUB) ---
@@ -1480,13 +1591,21 @@ class ClienteUpdate(BaseModel):
 # que pasar al servidor (parámetro de folio/cliente/texto).
 TOP_COTIZACIONES = 100
 
+# Cuántas cotizaciones se guardan en la copia offline (`/api/sync/pull`). Son 100
+# a propósito y no más: ese endpoint se dispara al iniciar sesión, y bajar 500
+# arrastraba 500 filas con su columna `Descripcion` y tardaba 28 s — con eso la
+# app arrancaba lentísima. Con 100 baja a ~1 s y sin conexión se sigue teniendo
+# la última pantalla para trabajar.
+TOTAL_COTIZACIONES_MAX = 100
+
 # Etiquetas de estatus por el campo Color de IndiceMateriales. La vista
 # `vw_ResumenCotizaciones` hacía este mismo CASE; aquí se resuelve en Python
 # para no depender de ella (ver la nota de abajo).
 _ESTATUS_COLOR = {0: "PENDIENTE", 1: "ENTREGADA", 2: "PAGADA"}
 
 
-def _listar_cotizaciones(conn, top: int = TOP_COTIZACIONES) -> list:
+def _listar_cotizaciones(conn, top: int = TOP_COTIZACIONES, pagina: int = 1,
+                         q: str = "") -> tuple:
     """Listado de cotizaciones de materiales (compartido por dos endpoints).
 
     POR QUÉ NO SE USA LA VISTA `vw_ResumenCotizaciones`:
@@ -1513,15 +1632,63 @@ def _listar_cotizaciones(conn, top: int = TOP_COTIZACIONES) -> list:
     """
     cursor = conn.cursor(as_dict=True)
 
-    # 1) Encabezados: sin GROUP BY y sin la vista, así que no toca la LOB.
-    #    Con TOP grande esta consulta se dragged por el LOB, por eso el tope.
-    cursor.execute(
-        "SELECT TOP %d I.Folio, I.IdCliente, ISNULL(C.Cliente, '') AS Cliente, "
-        "I.Contacto, I.Fecha, I.Descripcion, I.Autor, I.Color "
-        "FROM IndiceMateriales I LEFT JOIN Clientes C ON I.IdCliente = C.IdCliente "
-        "ORDER BY I.Folio DESC", (top,)
-    )
-    cabeceras = cursor.fetchall()
+    # Búsqueda del servidor. OJO: no busca en `Descripcion` a propósito, es
+    # varchar(max) y un `LIKE` sobre ella obliga a leer la tabla completa: con
+    # el disco de ese SQL Server en frío eso son 25 s. Se busca por folio,
+    # cliente, contacto, autor y estatus, que son columnas normales.
+    texto = (q or "").strip()
+    condiciones, params = [], []
+    if texto:
+        like = "%" + texto + "%"
+        if texto.isdigit():
+            condiciones.append("(I.Folio = %s OR I.Folio LIKE %s)")
+            params += [int(texto), texto + "%"]
+        # El nombre del cliente se busca con `IdCliente IN (subconsulta)` y NO
+        # con `ISNULL(C.Cliente,'') LIKE`: ese ISNULL obliga a SQL Server a
+        # recorrer clientes por cada cotización y el COUNT del total se iba a
+        # 25 s. Con la subconsulta el mismo filtro tarda 0.01 s.
+        condiciones.append(
+            "(I.IdCliente IN (SELECT IdCliente FROM clientes WHERE Cliente LIKE %s) "
+            "OR I.Contacto LIKE %s OR I.Autor LIKE %s)"
+        )
+        params += [like, like, like]
+    where = (" WHERE " + " OR ".join(condiciones)) if condiciones else ""
+    paginas = max(1, int(pagina))
+    top = max(1, int(top))
+    inicio = (paginas - 1) * top
+
+    # ── Dos consultas, y el orden importa ──
+    # 1) Los FOLIOS de la página, sin la columna de descripción.
+    #    Saltar con `OFFSET n` sobre una consulta que sí trae `Descripcion`
+    #    obligaba a SQL Server a leer y descartar las n filas anteriores con su
+    #    texto: la página 13 ( OFFSET 1200 ) tardó 28 s con el caché en frío.
+    #    Con solo el folio el salto se resuelve por el índice y es instantáneo.
+    sql_folios = ("SELECT I.Folio FROM IndiceMateriales I" + where +
+                  " ORDER BY I.Folio DESC OFFSET %d ROWS FETCH NEXT %d ROWS ONLY"
+                  % (inicio, top))
+    cursor.execute(sql_folios, list(params))
+    folios = [r["Folio"] for r in cursor.fetchall()]
+
+    if texto:
+        cursor.execute("SELECT COUNT(*) AS n FROM IndiceMateriales I" + where, list(params))
+        total = int(cursor.fetchone()["n"] or 0)
+    else:
+        cursor.execute("SELECT COUNT(*) AS n FROM IndiceMateriales")
+        total = int(cursor.fetchone()["n"] or 0)
+
+    # 2) El detalle de esos folios: aquí sí se lee `Descripcion`, pero solo de
+    #    las 100 filas que se van a mostrar.
+    cabeceras = []
+    if folios:
+        lista = ",".join(str(int(f)) for f in folios)
+        cursor.execute(
+            "SELECT I.Folio, I.IdCliente, ISNULL(C.Cliente, '') AS Cliente, I.Contacto, "
+            "I.Fecha, I.Descripcion, I.Autor, I.Color "
+            "FROM IndiceMateriales I LEFT JOIN " + _CLIENTES_UNICOS +
+            " C ON C.IdCliente = I.IdCliente WHERE I.Folio IN (" + lista + ")"
+        )
+        por_folio = {r["Folio"]: r for r in cursor.fetchall()}
+        cabeceras = [por_folio[f] for f in folios if f in por_folio]
 
     # 2) Suma de partidas SOLO de las cotizaciones que se devuelven.
     #    Antes se agregaba la tabla entera (1 179 folios) y se descartaban más
@@ -1558,11 +1725,12 @@ def _listar_cotizaciones(conn, top: int = TOP_COTIZACIONES) -> list:
             "subtotal": _fnum(subtotal), "iva": _fnum(subtotal * 0.16),
             "total": _fnum(subtotal * 1.16),
         })
-    return salida
+    return salida, total
 
 
 @app.get("/api/cotizaciones/resumen")
-def cotizaciones_resumen(current_user: dict = Depends(get_current_user)):
+def cotizaciones_resumen(pagina: int = 1, porPagina: int = TOP_COTIZACIONES,
+                         q: str = "", current_user: dict = Depends(get_current_user)):
     """Listado de cotizaciones de materiales para la pantalla principal.
 
     Es `def` y no `async def` a propósito: FastAPI corre los `def` en su
@@ -1575,10 +1743,17 @@ def cotizaciones_resumen(current_user: dict = Depends(get_current_user)):
     conn = None
     try:
         conn = get_connection()
-        salida = _listar_cotizaciones(conn)
+        salida, total = _listar_cotizaciones(
+            conn, top=max(1, min(int(porPagina or TOP_COTIZACIONES), 500)),
+            pagina=pagina, q=q)
         conn.close()
         conn = None
-        return salida
+        return {
+            "cotizaciones": salida,
+            "total": total,
+            "pagina": max(1, int(pagina)),
+            "por_pagina": max(1, min(int(porPagina or TOP_COTIZACIONES), 500)),
+        }
     except Exception as e:
         if conn:
             try:
@@ -2275,7 +2450,8 @@ async def clientes_list(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT IdCliente, Cliente, CondicionesPagoDias FROM clientes ORDER BY IdCliente ASC")
+        cursor.execute("SELECT IdCliente, Cliente, Dias AS CondicionesPagoDias FROM "
+                       + _CLIENTES_UNICOS + " ORDER BY IdCliente ASC")
         rows = cursor.fetchall()
         conn.close()
         return [{"id_cliente": r[0], "nombre": r[1], "dias_pago": r[2]} for r in rows]
@@ -2679,11 +2855,12 @@ def sync_pull(current_user: dict = Depends(get_current_user)):
     conn = None
     try:
         conn = get_connection()
+        filas, _ = _listar_cotizaciones(conn, top=TOTAL_COTIZACIONES_MAX)
         cots = [{"folio": r["folio"], "id_cliente": r["id_cliente"], "cliente": r["cliente"],
                  "contacto": r["contacto"], "fecha": r["fecha"], "descripcion": r["descripcion"],
                  "autor": r["autor"], "estatus": r["estatus"], "suma_partidas": r["suma_partidas"],
                  "flete": r["flete"], "subtotal": r["subtotal"], "iva": r["iva"], "total": r["total"]}
-                for r in _listar_cotizaciones(conn)]
+                for r in filas]
         cursor = conn.cursor()
         cursor.execute("SELECT IdCliente, Cliente, CondicionesPagoDias FROM clientes ORDER BY IdCliente ASC")
         clis = [{"id_cliente": r[0], "nombre": r[1], "dias_pago": r[2]} for r in cursor.fetchall()]
@@ -4778,7 +4955,7 @@ async def legends_score_log(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/api/legends/ranking")
-async def legends_ranking(current_user: dict = Depends(get_current_user)):
+def legends_ranking(current_user: dict = Depends(get_current_user)):
     """Ranking semanal de todos los usuarios activos con passkey."""
     conn = get_connection()
     try:
@@ -4789,7 +4966,7 @@ async def legends_ranking(current_user: dict = Depends(get_current_user)):
                    ISNULL(s.PuntuacionTotal, 0) AS PuntuacionTotal,
                    ISNULL(s.Nivel, 'Bronce') AS Nivel,
                    ISNULL(s.RachaDias, 0) AS RachaDias,
-                   a.AvatarBase64, a.AvatarUrl,
+                   LEN(a.AvatarBase64) AS AvatarLen, a.AvatarUrl,
                    u.Nickname AS Nickname
             FROM HUB_Users u
             INNER JOIN HUB_Passkeys p ON u.Id = p.IdUsuario
@@ -4797,10 +4974,20 @@ async def legends_ranking(current_user: dict = Depends(get_current_user)):
             LEFT JOIN HUB_UserAvatars a ON u.Id = a.IdUsuario
             WHERE u.Activo = 1
             GROUP BY u.Id, u.Nombre, s.PuntuacionSemanal, s.PuntuacionTotal,
-                     s.Nivel, s.RachaDias, a.AvatarBase64, a.AvatarUrl, u.Nickname
+                     s.Nivel, s.RachaDias, LEN(a.AvatarBase64), a.AvatarUrl, u.Nickname
             ORDER BY ISNULL(s.PuntuacionSemanal, 0) DESC
         """)
         rows = cursor.fetchall()
+
+        # Los avatares NO se traen en la consulta: solo su longitud. El base64
+        # crudo pesa 150-310 KB por usuario (2.5 MB en total) y además estaba en
+        # el GROUP BY, que es agrupar por una columna LOB — el mismo error que
+        # hacía tardar 26 s al listado de cotizaciones. Se piden solo los que
+        # no estén ya en caché, ya recortados a 128 px.
+        for r in rows:
+            _THUMBS_LEN[int(r["IdUsuario"])] = int(r["AvatarLen"] or 0)
+        thumbs = _avatares_miniatura(conn, [int(r["IdUsuario"]) for r in rows])
+
         ranking = []
         for i, r in enumerate(rows):
             ranking.append({
@@ -4812,7 +4999,7 @@ async def legends_ranking(current_user: dict = Depends(get_current_user)):
                 "nivel": r["Nivel"],
                 "icono_nivel": LEGENDS_ICONO.get(r["Nivel"], "🥉"),
                 "racha_dias": r["RachaDias"],
-                "avatar": r["AvatarBase64"] or r.get("AvatarUrl"),
+                "avatar": thumbs.get(int(r["IdUsuario"])) or r.get("AvatarUrl"),
                 "es_yo": r["IdUsuario"] == current_user["id"],
             })
         return {"ranking": ranking}
@@ -5072,62 +5259,100 @@ def _require_vales_oxxogas(current_user: dict):
 
 
 @app.get("/api/tickets-oxxogas")
-async def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
-    """Índice de tickets de OxxoGas con la relación factura ↔ estación.
-    OUTER APPLY con TOP 1 + LIKE sobre el XML: el folio del ticket vive dentro
-    del CFDI (NoIdentificacion), por eso la igualdad directa nunca matchea."""
+def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
+    """Índice de tickets de OxxoGas con la relación factura ↔ vale.
+
+    POR QUÉ YA NO SE USA EL `OUTER APPLY` CON `LIKE`:
+    el folio del ticket vive dentro del CFDI (`NoIdentificacion`), así que hace
+    falta un `LIKE '%folio%'` sobre `XmlContent`. Con 22 tickets y 255 vales de
+    ~6 KB de XML, eso son 36 MB de texto escaneados en cada petición: la consulta
+    tardaba 8 s de CPU y desde la API se iba a más de 20 s (timeout). Y como el
+    endpoint era `async def` con pymssql síncrono, esas 8 s detenían el event
+    loop y la app se anunciaba "Sin conexión".
+
+    Ahora los vales se leen UNA vez (0.5 s) y la coincidencia del folio dentro
+    del XML se hace en Python (0.08 s): 0.84 s en total, con los mismos 22
+    tickets emparejados a su factura. Sin índices nuevos y sin tocar la base.
+
+    La igualdad `XmlFolio = FolioTicket` se conserva como Atajo: es la vía
+    rápida cuando el CFDI sí trae el folio parseado (hoy no matchea ninguno, pero
+    si la tabla se puebla así ya no se recorre el XML). Cuando varios vales
+    contienen el folio, gana el más reciente, igual que el `ORDER BY Fecha DESC`
+    del `TOP 1` original.
+    """
     _require_vales_oxxogas(current_user)
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         cursor = conn.cursor(as_dict=True)
         cursor.execute("""
             SELECT TOP 300
                 T.Id, T.FolioTicket, T.FechaRegistro, T.Estacion, T.Descripcion,
                 CASE WHEN T.ImagenTicket IS NOT NULL THEN 1 ELSE 0 END AS TieneFoto,
-                C.Cliente, A.MarcaModelo, A.Placas, U.Nombre AS Capturo,
-                F.XmlFolio AS Factura, F.Monto, F.XmlLitros, F.XmlConcepto
+                C.Cliente, A.MarcaModelo, A.Placas, U.Nombre AS Capturo
             FROM HUB_OxxoGasTickets T
             LEFT JOIN clientes C ON C.IdCliente = T.IdCliente
             LEFT JOIN HUB_Automoviles A ON A.Id = T.IdVehiculo
             LEFT JOIN HUB_Users U ON U.Id = T.IdUsuario
-            OUTER APPLY (
-                SELECT TOP 1 V2.XmlFolio, V2.Monto, V2.XmlLitros, V2.XmlConcepto
-                FROM HUB_OxxoGasVales V2
-                WHERE V2.XmlFolio = T.FolioTicket
-                   OR V2.XmlContent LIKE '%' + T.FolioTicket + '%'
-                ORDER BY V2.Fecha DESC
-            ) F
             ORDER BY T.FechaRegistro DESC
         """)
-        rows = cursor.fetchall()
+        tickets = cursor.fetchall()
+
+        # Los vales se leen del más reciente al más viejo: el primero que
+        # contiene el folio es el que se queda, como el TOP 1 por Fecha.
+        cursor.execute(
+            "SELECT XmlFolio, Fecha, Monto, XmlLitros, XmlConcepto, XmlContent "
+            "FROM HUB_OxxoGasVales ORDER BY Fecha DESC"
+        )
+        vales = cursor.fetchall()
+        conn.close()
+        conn = None
+
+        # Atajo por folio exacto, sin recorrer el XML.
+        por_folio = {}
+        for v in vales:
+            xv = str(v["XmlFolio"] or "").strip()
+            if xv and xv not in por_folio:
+                por_folio[xv] = v
+
         resultado = []
-        for r in rows:
-            estacion = (r["Estacion"] or "").strip()
+        for t in tickets:
+            folio = (t["FolioTicket"] or "").strip()
+            v = por_folio.get(folio) if folio else None
+            if v is None and folio:
+                for cand in vales:
+                    if folio in str(cand["XmlContent"] or ""):
+                        v = cand
+                        break
+            estacion = (t["Estacion"] or "").strip()
             resultado.append({
-                "id": r["Id"],
-                "folio": (r["FolioTicket"] or "").strip(),
-                "fecha": r["FechaRegistro"].isoformat() if r["FechaRegistro"] else None,
+                "id": t["Id"],
+                "folio": folio,
+                "fecha": t["FechaRegistro"].isoformat() if t["FechaRegistro"] else None,
                 "estacion": estacion or None,          # null → front muestra "Pendiente"
-                "descripcion": r["Descripcion"] or "",
-                "tiene_foto": bool(r["TieneFoto"]),
-                "cliente": r["Cliente"],
-                "marca_modelo": r["MarcaModelo"],
-                "placas": r["Placas"],
-                "capturo": r["Capturo"],
-                "factura": r["Factura"] or None,        # null → front muestra "Pendiente"
-                "monto": float(r["Monto"]) if r["Monto"] is not None else None,
-                "litros": float(r["XmlLitros"]) if r["XmlLitros"] is not None else None,
-                "concepto": r["XmlConcepto"],
+                "descripcion": t["Descripcion"] or "",
+                "tiene_foto": bool(t["TieneFoto"]),
+                "cliente": t["Cliente"],
+                "marca_modelo": t["MarcaModelo"],
+                "placas": t["Placas"],
+                "capturo": t["Capturo"],
+                "factura": (v["XmlFolio"] or None) if v else None,   # null → "Pendiente"
+                "monto": float(v["Monto"]) if v and v["Monto"] is not None else None,
+                "litros": float(v["XmlLitros"]) if v and v["XmlLitros"] is not None else None,
+                "concepto": v["XmlConcepto"] if v else None,
             })
         return resultado
     except Exception as e:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-    finally:
-        conn.close()
 
 
 @app.get("/api/tickets-oxxogas/saldo")
-async def tickets_oxxogas_saldo(current_user: dict = Depends(get_current_user)):
+def tickets_oxxogas_saldo(current_user: dict = Depends(get_current_user)):
     """Saldo de la cuenta Go Vale (HUB_Config 'govale_saldo'/'govale_saldo_fecha').
 
     El valor lo actualiza el worker del HUB (cron_sync_govale_vouchers.py) cada
@@ -5916,7 +6141,7 @@ class ImagenPantallaRequest(BaseModel):
 
 
 @app.get("/api/pantalla/portada")
-async def pantalla_portada_actual(current_user: dict = Depends(get_current_user)):
+def pantalla_portada_actual(current_user: dict = Depends(get_current_user)):
     """La portada que está en pantalla ahora (metadatos + base64 para
     previsualizarla) más el historial para poder volver a una anterior."""
     conn = get_connection()

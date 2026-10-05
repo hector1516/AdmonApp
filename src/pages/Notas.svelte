@@ -3,6 +3,7 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	// Notas del equipo → tabla HUB_DashboardNotas, la MISMA que lee la pantalla
 	// 📌 del Dashboard de la oficina (kiosco, dashboard.ecc-sa.com.mx:8101).
@@ -18,6 +19,7 @@
 	let { embebido = false } = $props();
 
 	let notas = $state([]);
+	let pagina = $state(1);
 	let loading = $state(true);
 	let error = $state('');
 	let aviso = $state('');
@@ -49,6 +51,9 @@
 		if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
 		return '—';
 	}
+
+	const POR_PAGINA = 100;
+	const pagActual = $derived(notas.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA));
 
 	async function cargar() {
 		try {
@@ -208,7 +213,7 @@
 		<div class="state">📝 No hay notas todavía. ¡Crea la primera con “➕ Nueva nota”!</div>
 	{:else}
 		<div class="notas-lista">
-			{#each notas as n (n.id)}
+			{#each pagActual as n (n.id)}
 				<article class="nota-card" style="--c:{n.color}">
 					<div class="nota-head">
 						<h2 class="nota-titulo">{#if n.fija}<span class="nota-fija">📌 fija</span>{/if}{n.titulo}</h2>
@@ -225,6 +230,7 @@
 				</article>
 			{/each}
 		</div>
+		<Paginacion total={notas.length} bind:pagina porPagina={POR_PAGINA} etiqueta="notas" />
 	{/if}
 </div>
 

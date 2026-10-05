@@ -5,8 +5,11 @@
 	import { online } from '$lib/stores/online.js';
 	import { listar } from '$lib/cotizacionesApi.js';
 	import { mapEstatus, fmtMXN, folioFmt } from '$lib/cotizaciones.js';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	let cotizaciones = $state([]);
+	let pagina = $state(1);
+	let total = $state(0);
 	let loading = $state(true);
 	let error = $state('');
 	let busqueda = $state('');
@@ -38,11 +41,17 @@
 				})
 	);
 
+	const POR_PAGINA = 100;
+	// El filtro local solo aplica sin conexión (con red manda el del servidor).
+	const pagActual = $derived(filtradas);
+
 	async function cargar() {
 		loading = true;
 		error = '';
 		try {
-			cotizaciones = await listar();
+			const r = await listar({ pagina, porPagina: POR_PAGINA, q: busqueda.trim() });
+			cotizaciones = r.rows;
+			total = r.total;
 		} catch (e) {
 			console.error('Error cargando cotizaciones:', e);
 			error = e.message === 'Sesión expirada' ? e.message : 'No se pudo cargar. Revisa tu conexión.';
@@ -50,6 +59,25 @@
 			loading = false;
 		}
 	}
+
+	// Cambiar de página pide esa página al servidor. El slicing ya no es local.
+	$effect(() => {
+		pagina;
+		if (cargar) cargar();
+	});
+
+	// La búsqueda va al servidor, pero se espera a que el usuario deje de
+	// escribir: una petición por tecla sería tirar consultas a la base.
+	let temporizador;
+	$effect(() => {
+		const q = busqueda.trim();
+		clearTimeout(temporizador);
+		if (!q) return;
+		temporizador = setTimeout(() => {
+			pagina = 1;
+			cargar();
+		}, 450);
+	});
 
 	onMount(async () => {
 		if (!auth.isLoggedIn()) {
@@ -87,7 +115,11 @@
 	{/if}
 
 	<p style="color: var(--color-text-muted); font-size: 0.8rem;">
-		Mostrando {filtradas.length} de {cotizaciones.length} cotizaciones.
+		{#if busqueda.trim()}
+			{filtradas.length} resultado{filtradas.length === 1 ? '' : 's'} para “{busqueda.trim()}”
+		{:else}
+			Mostrando {cotizaciones.length} de <b>{total || cotizaciones.length}</b> cotizaciones
+		{/if}
 	</p>
 
 	{#if loading}
@@ -98,7 +130,7 @@
 		<div class="empty">No hay cotizaciones registradas.</div>
 	{:else}
 		<div class="list">
-			{#each filtradas as c (c.idLocal)}
+			{#each pagActual as c (c.idLocal)}
 				<button
 					class="list-card"
 					on:click={() => navigate(`/cotizaciones/${c.folio ?? c.idLocal}`)}
@@ -125,6 +157,8 @@
 					</div>
 				</button>
 			{/each}
+			<Paginacion total={busqueda.trim() ? filtradas.length : total} bind:pagina
+				porPagina={POR_PAGINA} etiqueta="cotizaciones" />
 		</div>
 	{/if}
 </div>

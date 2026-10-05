@@ -3,12 +3,14 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	// Tickets de OxxoGas: lectura de HUB_OxxoGasTickets (captura en Field/HUB)
 	// con factura CFDI enlazada y estación. Orden: más reciente arriba.
 	// Identificador principal: folio del ticket impreso (FolioTicket).
 
 	let tickets = $state([]);
+	let pagina = $state(1);
 	let loading = $state(true);
 	let error = $state('');
 	let busqueda = $state('');
@@ -55,6 +57,16 @@
 			if (q.includes('pendiente')) return !t.factura || !t.estacion;
 			return false;
 		});
+	});
+
+	const POR_PAGINA = 100;
+	const pagActual = $derived(filtrados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA));
+
+	// Cada búsqueda arranca en la primera página: si no, el usuario puede
+	// quedarse en una página vacía con el listado ya filtrado.
+	$effect(() => {
+		busqueda;
+		pagina = 1;
 	});
 
 	async function cargar() {
@@ -128,7 +140,7 @@
 		<div class="state">🎫 No hay tickets{busqueda.trim() ? ` que coincidan con “${busqueda.trim()}”` : ''}.</div>
 	{:else}
 		<div class="grid">
-			{#each filtrados as t (t.id)}
+			{#each pagActual as t (t.id)}
 				<button class="card-ticket" onclick={() => navigate(`/tickets_oxxogas/${t.id}`)} title="Ver detalle completo">
 					<div class="body">
 						<div class="folio">#{t.folio}</div>
@@ -154,6 +166,8 @@
 				</button>
 			{/each}
 		</div>
+		<!-- La rejilla es CSS grid; la paginación va debajo para que no ocupe una celda. -->
+		<Paginacion total={filtrados.length} bind:pagina porPagina={POR_PAGINA} etiqueta="tickets" />
 	{/if}
 </div>
 

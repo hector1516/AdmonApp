@@ -3,6 +3,47 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.7.0] - 2026-10-05
+
+### Corregido
+- **🎫 Tickets OxxoGas se caía (>20 s, timeout).** Emparejaba cada ticket con su
+  vale con `XmlContent LIKE '%folio%'`: 22 tickets × 255 vales de 6 KB de XML
+  son 36 MB de texto escaneados por petición, 8 s de CPU. La igualdad
+  `XmlFolio = FolioTicket` no matchea ninguno, así que todo el costo era ese
+  `LIKE`. Ahora los vales se leen una vez (0.5 s) y la coincidencia se hace en
+  Python (0.08 s): **0.84 s**, con los mismos tickets emparejados a su factura.
+- **🏆 Legends tardaba 5 s y pesaba 2.5 MB.** El ranking traía el avatar EN
+  BASE64 de cada usuario (PNG de 578×432, 150-310 KB cada uno) y además lo
+  metía en el `GROUP BY`. Ahora solo se pide la longitud del base64 y el avatar
+  se recorta a 128 px **en el servidor** (5.7 KB), y solo se descargan los que
+  no estén en caché: 156 KB y 0 s. La respuesta no cambia de forma, así que el
+  front no se entera.
+- **📦 Inventario devolvía 500 en todas partes**: la consulta pedía la columna
+  `Id`, que no existe; la de llave es `IdInventario`.
+- **🔎 La búsqueda de cotizaciones tardaba 51 s.** Filtrar por cliente con
+  `ISNULL(C.Cliente,'') LIKE` hacía que el `COUNT` del total recorriera clientes
+  por cada cotización (25 s). Con `IdCliente IN (subconsulta)` el mismo filtro
+  tarda 0.01 s.
+- **💾 El prefetch sin conexión tardaba 28 s en cada inicio de sesión**: pedía 500
+  cotizaciones con su columna de texto. Bajó a 100 (~1 s); para trabajar sin
+  conexión se sigue teniendo la última pantalla.
+- **📋 Filas duplicadas en el listado de cotizaciones.** `clientes` tiene 7
+  `IdCliente` repetidos y el `LEFT JOIN` multiplicaba las 57 cotizaciones de
+  esos clientes. Se agrupa por `IdCliente` para que cada cotización aparezca
+  una sola vez.
+- **⚠️ Sigue pendiente arreglar los datos**: las 7 filas duplicadas de `clientes`
+  (ATTC, Dail, GRMA, IJDM, ISAL, LEOS, SSMT) se siguen limpiando solo para
+  mostrar; en la ficha pueden verse las dos.
+
+### Agregado
+- **📄 Paginación de 100 en 100 en todos los listados**, con barra al final de la
+  lista: ⏮ ◀ Anterior · "Página X de Y" · Siguiente ▶ ⏭, más un campo para saltar
+  a una página. Las flechas del teclado también funcionan. En Cotizaciones la
+  paginación es **del servidor** (cada página pide solo sus 100 folios, para no
+  arrastrar la columna de descripción entera) y el buscador va al servidor, así
+  que la búsqueda ya no se limita a lo que está cargado.
+  Componente nuevo: `src/components/Paginacion.svelte`.
+
 ## [1.6.3] - 2026-10-05
 
 ### Corregido

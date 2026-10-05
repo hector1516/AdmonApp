@@ -3,6 +3,7 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
+	import Paginacion from '../components/Paginacion.svelte';
 
 	// Modo pestaña: lo usa src/pages/Admin.svelte, que pone el encabezado y la
 	// barra de pestañas del módulo. Así acá no se vuelve a pintar el .page ni el
@@ -10,12 +11,16 @@
 	let { embebido = false } = $props();
 
 	let usuarios = $state([]);
+	let pagina = $state(1);
 	let loading = $state(true);
 	let error = $state('');
 	// 📷 Avatar por usuario: {id → blob URL}. Solo se pide la foto de quienes
 	// tienen, en paralelo, y se cachea en la sesión para no repetir la descarga
 	// cada vez que se vuelve a la lista.
 	let avatares = $state({});
+
+	const POR_PAGINA = 100;
+	const pagActual = $derived(usuarios.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA));
 
 	function iniciales(nombre) {
 		const partes = String(nombre || '').trim().split(/\s+/).filter(Boolean);
@@ -105,7 +110,7 @@
 		<div class="empty">No hay usuarios registrados.</div>
 	{:else}
 		<div class="list">
-			{#each usuarios as u (u.id)}
+			{#each pagActual as u (u.id)}
 				<button class="list-card" on:click={() => navigate(`/usuarios/${u.id}`)}>
 					<div class="avatar" class:mini={u.activo === false}>
 						{#if avatares[u.id]}
@@ -137,6 +142,9 @@
 				</button>
 			{/each}
 		</div>
+		<!-- Fuera del div .list porque en escritorio es un grid de 2 columnas y
+		     la paginación no debe ocupar una celda. -->
+		<Paginacion total={usuarios.length} bind:pagina porPagina={POR_PAGINA} etiqueta="usuarios" />
 	{/if}
 </div>
 
