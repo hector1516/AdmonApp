@@ -1666,11 +1666,11 @@ def _listar_cotizaciones(conn, top: int = TOP_COTIZACIONES, pagina: int = 1,
     sql_folios = ("SELECT I.Folio FROM IndiceMateriales I" + where +
                   " ORDER BY I.Folio DESC OFFSET %d ROWS FETCH NEXT %d ROWS ONLY"
                   % (inicio, top))
-    cursor.execute(sql_folios, list(params))
+    cursor.execute(sql_folios, tuple(params))
     folios = [r["Folio"] for r in cursor.fetchall()]
 
     if texto:
-        cursor.execute("SELECT COUNT(*) AS n FROM IndiceMateriales I" + where, list(params))
+        cursor.execute("SELECT COUNT(*) AS n FROM IndiceMateriales I" + where, tuple(params))
         total = int(cursor.fetchone()["n"] or 0)
     else:
         cursor.execute("SELECT COUNT(*) AS n FROM IndiceMateriales")

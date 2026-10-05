@@ -20,7 +20,8 @@
   front no se entera.
 - **📦 Inventario devolvía 500 en todas partes**: la consulta pedía la columna
   `Id`, que no existe; la de llave es `IdInventario`.
-- **🔎 La búsqueda de cotizaciones tardaba 51 s.** Filtrar por cliente con
+- **🔎 La búsqueda de cotizaciones devolvía 500**: pymssql exige los parámetros
+  como tupla y se le estaba pasando una lista. Y cuando sí respondía, tardaba 51 s. Filtrar por cliente con
   `ISNULL(C.Cliente,'') LIKE` hacía que el `COUNT` del total recorriera clientes
   por cada cotización (25 s). Con `IdCliente IN (subconsulta)` el mismo filtro
   tarda 0.01 s.
