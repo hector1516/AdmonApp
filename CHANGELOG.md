@@ -3,6 +3,26 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.7.3] - 2026-10-05
+
+### Corregido
+- **La asistencia mostraba la hora equivocada cuando el escáner se atrasaba.**
+  `HUB_NetworkPresence` guarda DOS fechas y su propio docstring dice que la
+  asistencia debe leer `FechaDeteccion` (el instante del escaneo que prueba el
+  evento) y no `FechaHora` (cuándo lo procesó el worker). Ambas apps leían la
+  segunda. Mientras el worker va al día da igual, pero el 5 de octubre se
+  quedó 6 h atascado y drenó de golpe 1 195 escaneos: las columnas se
+  separaron hasta 51 minutos y las llegadas se veían con la hora del drenaje.
+  Rosa aparecía a las 09:22 cuando llegó a las 08:35, y el ajuste de 4 min
+  caía sobre el número equivocado. Ahora ambas apps usan
+  `COALESCE(FechaDeteccion, FechaHora)`, con respaldo para los registros
+  anteriores a esa columna.
+- **El aviso "el escáner no corre" volvía a ser un falso positivo.** El latido se
+  medía sobre `HUB_NetworkScanRuns` y, si esa tabla tenía filas, no se miraba la
+  otra. Con el escáner escribiendo en el camino viejo, la nueva quedó con miles
+  de filas viejas y la pantalla anunciaba "16 h sin escanear" con el escáner
+  escribiendo hace 1 min. Ahora el latido es el máximo de las dos.
+
 ## [1.7.2] - 2026-10-05
 
 ### Corregido

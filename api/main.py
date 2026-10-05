@@ -988,14 +988,20 @@ def _latido_scan(conn):
 
     El escáner puede escribir en el camino NUEVO (`HUB_NetworkScanRuns`, un
     renglón por ciclo con la lista completa de MACs) o en el VIEJO
-    (`HUB_NetworkScanResults`, un renglón por MAC y ciclo). Las dos tablas
-    existen y sólo una recibe datos a la vez, así que se pregunta primero la
-    nueva y se cae a la vieja: es el mismo criterio que usa el worker. Ambas
-    tienen índice por FechaScan, así que el MAX es barato.
+    (`HUB_NetworkScanResults`, un renglón por MAC y ciclo). Se mira EL MÁS
+    RECIENTE de las dos, no la primera que tenga filas.
+
+    OJO con esto, que ya costó un falso positivo real: si el escáner está
+    escribiendo en la tabla vieja, la nueva se queda congelada con miles de
+    filas viejas. Devolviendo la nueva "porque tiene datos", la pantalla
+    anunciaba "el escáner no corre desde hace 16 h" mientras el escáner escribía
+    hace 1 minuto. Con el MAX de las dos, el latido refleja lo que de verdad
+    pasa.
     """
     consulta = ("SELECT MAX({col}) AS ciclo, "
                 "DATEDIFF(MINUTE, MAX({col}), GETDATE()) AS minutos FROM dbo.{tab}")
     cur = conn.cursor(as_dict=True)
+    mejor_ciclo, mejor_minutos = None, None
     for tab, col in (("HUB_NetworkScanRuns", "FechaScan"),
                      ("HUB_NetworkScanResults", "FechaScan")):
         try:
@@ -1003,10 +1009,13 @@ def _latido_scan(conn):
         except Exception:
             continue  # la tabla no existe en esta base: se prueba la otra
         fila = cur.fetchone()
-        if fila and fila.get("ciclo"):
-            return fila["ciclo"], int(fila["minutos"] or 0)
+        if not fila or not fila.get("ciclo"):
+            continue
+        if mejor_ciclo is None or fila["ciclo"] > mejor_ciclo:
+            mejor_ciclo = fila["ciclo"]
+            mejor_minutos = int(fila["minutos"] or 0)
     cur.close()
-    return None, None
+    return mejor_ciclo, mejor_minutos
 
 
 @app.get("/api/asistencia")
@@ -1033,23 +1042,36 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
         # Un solo SELECT. `en_sitio` se resuelve con OUTER APPLY (el último evento
         # de hoy de cada quien) en vez del bucle de una consulta por persona que
         # usa el kiosco: mismo resultado, una sola ida a la base.
-        cursor.execute("""
+        # EV_FECHA: el instante del ESCANEO que prueba el evento, con respaldo
+        # en la hora de proceso para los registros anteriores a esa columna.
+        #
+        # OJO, esto no es cosmético. El scanner guarda DOS fechas y su propio
+        # docstring dice que la asistencia debe usar `FechaDeteccion` (la otra es
+        # "cuándo lo procesó el worker"). Cuando el worker se quedó atascado 6 h
+        # y drenó de golpe 1 195 escaneos pendientes, las dos columnas se
+        # separaron y el listado mostraba la hora del drenaje: Rosa llegaba
+        # 09:22 cuando llegó 08:35, y el ajuste de minutos se aplicaba sobre el
+        # número equivocado. Con FechaDeteccion el ajuste cae sobre la real.
+        EV = "COALESCE(p.FechaDeteccion, p.FechaHora)"
+        EV2 = "COALESCE(p2.FechaDeteccion, p2.FechaHora)"
+
+        cursor.execute(f"""
             SELECT
                 d.IdUsuario AS id_usuario,
                 ISNULL(u.Nombre, '(sin usuario)') AS nombre,
                 -- Primera ENTRADA del día YA AJUSTADA, con tope al inicio del día
                 -- para que a las 00:02 no salga "23:58 de ayer".
-                CASE WHEN MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END)
+                CASE WHEN MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN {EV} END)
                          IS NULL THEN NULL
-                     ELSE CASE WHEN DATEADD(MINUTE, -%d, MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END))
+                     ELSE CASE WHEN DATEADD(MINUTE, -%d, MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN {EV} END))
                                     < CAST(CAST(GETDATE() AS date) AS datetime)
                                THEN CAST(CAST(GETDATE() AS date) AS datetime)
-                               ELSE DATEADD(MINUTE, -%d, MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END))
-                         END
+                               ELSE DATEADD(MINUTE, -%d, MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN {EV} END))
+                          END
                 END AS entrada,
-                MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END) AS entrada_cruda,
-                MAX(CASE WHEN p.TipoEvento = 'ENTRADA' THEN p.FechaHora END) AS ultima_entrada,
-                MAX(CASE WHEN p.TipoEvento = 'SALIDA'  THEN p.FechaHora END) AS salida,
+                MIN(CASE WHEN p.TipoEvento = 'ENTRADA' THEN {EV} END) AS entrada_cruda,
+                MAX(CASE WHEN p.TipoEvento = 'ENTRADA' THEN {EV} END) AS ultima_entrada,
+                MAX(CASE WHEN p.TipoEvento = 'SALIDA'  THEN {EV} END) AS salida,
                 COUNT(*) AS eventos,
                 CASE WHEN ult.ultimo_tipo = 'ENTRADA' THEN 1 ELSE 0 END AS en_sitio
             FROM HUB_NetworkPresence p
@@ -1060,11 +1082,11 @@ async def get_asistencia(current_user: dict = Depends(get_current_user)):
                 FROM HUB_NetworkPresence p2
                 JOIN HUB_NetworkDevices d2 ON d2.Id = p2.IdDispositivo
                 WHERE d2.IdUsuario = d.IdUsuario
-                  AND p2.FechaHora >= CAST(CAST(GETDATE() AS date) AS datetime)
+                  AND {EV2} >= CAST(CAST(GETDATE() AS date) AS datetime)
                 ORDER BY p2.Id DESC
             ) ult
-            WHERE p.FechaHora >= CAST(CAST(GETDATE() AS date) AS datetime)
-              AND p.FechaHora < DATEADD(day, 1, CAST(CAST(GETDATE() AS date) AS datetime))
+            WHERE {EV} >= CAST(CAST(GETDATE() AS date) AS datetime)
+              AND {EV} < DATEADD(day, 1, CAST(CAST(GETDATE() AS date) AS datetime))
               AND d.IdUsuario IS NOT NULL
             GROUP BY d.IdUsuario, u.Nombre, ult.ultimo_tipo
             ORDER BY entrada

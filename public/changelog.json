@@ -1,6 +1,6 @@
 {
   "app": "admon",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "cambios": [
     "📦 Cotizaciones Materiales: ya no tarda 26 s ni dice “Sin conexión”, y el listado ya no infla el total al doble.",
     "🕘 Asistencia: el aviso de “el escáner no reporta” ya no salía de mentira — ahora se mide el ciclo del escáner, no las entradas y salidas.",
@@ -18,6 +18,7 @@
     "🕒 Los registros de kilometraje guardan siempre la hora de México (antes algunos salían 6 horas adelantados) y ya no dejan capturar fechas futuras.",
     "📄 Paginación de 100 en 100 en todos los listados, y velocidad: Tickets OxxoGas, Legends, Inventario y la búsqueda de cotizaciones ya no congelan la app.",
     "🔧 El deploy automático ya publica en el servidor correcto (WebbApps): antes informaba éxito y en realidad no llegaba a los usuarios.",
-    "🖼️ La pantalla de portada apuntaba al servidor viejo (ya no respondía) y el workflow del panel token escribía en el equipo anterior."
+    "🖼️ La pantalla de portada apuntaba al servidor viejo (ya no respondía) y el workflow del panel token escribía en el equipo anterior.",
+    "🕘 Asistencia: las llegadas se veían con la hora del procesamiento en vez de la real, y el aviso de escáner caído volvía a ser falsa alarma."
   ]
 }
