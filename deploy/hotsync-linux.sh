@@ -33,7 +33,9 @@ DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
 BUILD_DIR=""
-cleanup() { [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR"; }
+cleanup() {
+  [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 run() {
@@ -65,12 +67,18 @@ fi
 # fallar al `npm ci` siguiente por permisos).
 BUILD_DIR="$(mktemp -d /tmp/admon-build.XXXXXX)"
 say "1/4 compilando el frontend (${NODE_IMAGE})"
+# El contenedor corre con el MIS usuario que el runner (no root): si no, deja
+# node_modules y dist propiedad de root dentro de /tmp y el `rm -rf` de limpieza
+# falla con "Permission denied" (y `set -e` convierte eso en un fallo falso).
 run docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -e npm_config_cache=/tmp/.npmcache \
   -v "$ROOT":/src:ro \
   -v "$BUILD_DIR":/app \
   -w /app \
   "$NODE_IMAGE" \
-  sh -lc 'cd /src && tar cf - --exclude=node_modules --exclude=.git --exclude=dist . | tar xf - -C /app && npm ci --no-audit --no-fund && npm run build'
+  sh -lc 'cd /src && tar cf - --exclude=node_modules --exclude=.git --exclude=dist . | tar xf - -C /app && cd /app && npm ci --no-audit --no-fund && npm run build'
 
 if [ "$DRY" = "0" ]; then
   # npm run build deja el resultado en /app/dist dentro del contenedor; ese /app

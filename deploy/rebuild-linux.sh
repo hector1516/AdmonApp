@@ -38,7 +38,9 @@ DRY=0
 [ "${1:-}" = "--dry-run" ] && DRY=1
 
 BUILD_DIR=""
-cleanup() { [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR"; }
+cleanup() {
+  [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR" ] && rm -rf "$BUILD_DIR" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 run() {
@@ -59,12 +61,18 @@ die() { say "ERROR: $*" >&2; exit 1; }
 # compilado: por eso este camino también compila, con node en un contenedor.
 BUILD_DIR="$(mktemp -d /tmp/admon-build.XXXXXX)"
 say "1/5 compilando el frontend (${NODE_IMAGE})"
+# El contenedor corre con el MIS usuario que el runner (no root): si no, deja
+# node_modules y dist propiedad de root dentro de /tmp y el `rm -rf` de limpieza
+# falla con "Permission denied" (y `set -e` convierte eso en un fallo falso).
 run docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
+  -e npm_config_cache=/tmp/.npmcache \
   -v "$ROOT":/src:ro \
   -v "$BUILD_DIR":/app \
   -w /app \
   "$NODE_IMAGE" \
-  sh -lc 'cd /src && tar cf - --exclude=node_modules --exclude=.git --exclude=dist . | tar xf - -C /app && npm ci --no-audit --no-fund && npm run build'
+  sh -lc 'cd /src && tar cf - --exclude=node_modules --exclude=.git --exclude=dist . | tar xf - -C /app && cd /app && npm ci --no-audit --no-fund && npm run build'
 
 if [ "$DRY" = "0" ]; then
   [ -f "$BUILD_DIR/dist/index.html" ] || die "el build no produjo dist/index.html"
@@ -75,7 +83,9 @@ fi
 # Se arma un contexto limpio con dist/ dentro, porque el Dockerfile copia
 # `dist/` y el clon del runner no lo tiene (está en .gitignore).
 STAGE="$(mktemp -d /tmp/admon-stage.XXXXXX)"
-cleanup_stage() { [ -n "$STAGE" ] && [ -d "$STAGE" ] && rm -rf "$STAGE"; }
+cleanup_stage() {
+  [ -n "$STAGE" ] && [ -d "$STAGE" ] && rm -rf "$STAGE" 2>/dev/null || true
+}
 trap 'cleanup; cleanup_stage' EXIT
 
 say "2/5 armando el contexto de build"
