@@ -1,29 +1,35 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Admon · deploy automático
 #
-# La idea: no reconstruir la imagen en cada push. El gate mira QUÉ archivos
+# DÓNDE SE DESPLIEGA
+# La app que usan los usuarios vive en WebbApps (Debian, 10.188.141.17), en el
+# contenedor docker `admon` publicado en el puerto 8103. El deploy corre ahí, en
+# el runner `WebbApps-Runner` (label `admon-deploy`).
+#
+# Antes este workflow corría en un runner Windows (ServerVM 10.188.141.31) con
+# PowerShell 5.1, cygpath, schtasks y C:\admon. Ese servidor ya no publica la
+# app, así que los deploys "tenían éxito" en una máquina a la que nadie llega:
+# el síntoma era que GitHub decía success y la app seguía igual.
+#
+# LA IDEA: no reconstruir la imagen en cada push. El gate mira QUÉ archivos
 # cambió y elige entre dos caminos:
 #
-#   rebuild  → deploy/build.ps1 (reconstruye la imagen y recrea el
-#              contenedor, con el rollback que ya tenía). Se usa cuando el push
-#              tocó un insumo de la IMAGEN: Dockerfile / requirements.txt / api/requirements.txt
-#   hotsync  → deploy/hotsync.sh (compila lo estático y lo copia al contenedor
-#              que ya corre). Se usa para todo lo demás: .svelte, .css, .py.
+#   hotsync  → deploy/hotsync-linux.sh  (compila el front y copia dist/ y api/
+#              al contenedor que ya corre, sin docker build). Es lo de siempre.
+#   rebuild  → deploy/rebuild-linux.sh  (reconstruye la imagen y recrea el
+#              contenedor). Solo cuando el push tocó un insumo de la IMAGEN:
+#              Dockerfile / requirements.txt / api/requirements.txt
 #
 # ── Sobre el shell de los pasos ──────────────────────────────────────────────
-# El runner es WINDOWS con Windows PowerShell 5.1. No hay PowerShell 7, así que
-# `shell: pwsh` muere con "pwsh: command not found". Y `shell: bash` tampoco
-# sirve: en Windows apunta a C:\Windows\system32\bash.exe, que es el de WSL y no
-# está instalado en el ServerVM. Por eso los pasos van en `shell: powershell`, y
-# el único que necesita un .sh (el hotsync) invoca al Git Bash explícitamente.
+# El runner de WebbApps es Linux: todos los pasos van en bash. El gate NO corre
+# en el runner sino en ubuntu-latest, porque solo compara archivos vía la API de
+# GitHub y así no depende de que el runner esté vivo.
 #
-# Por lo mismo las salidas se escriben con [IO.File]::AppendAllText y no con
-# `Out-File -Encoding utf8`: en PowerShell 5.1 eso mete BOM, y un BOM al
-# principio de $GITHUB_OUTPUT hace que GitHub no lea las variables del gate.
-#
-# ── Sobre el runner ──────────────────────────────────────────────────────────
-# Cada repo necesita su propio runner: un folder de runner solo sirve para uno.
-# Este está en C:\actions-runner-admonapp, nombre AdmonApp-Runner, labels self-hosted,windows.
+# ── Sobre la etiqueta `admon-deploy` ─────────────────────────────────────────
+# Hay dos runners de este repo: `WebbApps-Runner` (Linux) y `AdmonApp-Runner`
+# (Windows, el viejo). Con `runs-on: self-hosted` cualquiera de los dos puede
+# tomar el job, y el de Windows es el que ya no sirve. Por eso el deploy pide la
+# etiqueta explícita `admon-deploy`.
 # ─────────────────────────────────────────────────────────────────────────────
 name: Deploy Admon
 
@@ -67,241 +73,130 @@ jobs:
             exit 0
           fi
           echo "::error::deploy(s) con mas de 10 min en cola: $(echo "$ATASCADOS" | tr '\n' ' ')"
-          echo "::error::casi siempre es que este repo NO tiene un runner self-hosted"
-          echo "::error::online. El registro es por repo, con folder y nombre propios."
+          echo "::error::casi siempre es que el runner WebbApps-Runner esta caido:"
+          echo "::error::  systemctl status actions-runner-admonapp   (en 10.188.141.17)"
           echo "$ATASCADOS" | while read -r id; do
             gh api -X POST "repos/${{ github.repository }}/actions/runs/$id/cancel" >/dev/null 2>&1 \
               && echo "  cancelado $id" || true
           done
 
-  deploy:
-    runs-on: self-hosted
-    timeout-minutes: 30
-
+  # El gate va en ubuntu-latest a propósito: es el paso que decide entre
+  # hotsync y rebuild, y si se queda atascado por runner perdido no hay forma de
+  # que el propio gate avise. Corriendo en GitHub-hosted eso no puede pasar.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      modo: ${{ steps.decidir.outputs.modo }}
+      motivo: ${{ steps.decidir.outputs.motivo }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # El hotsync necesita el código, y el gate necesita historial para
-          # comparar contra el push anterior.
+          # El gate necesita historial para comparar contra el push anterior.
           fetch-depth: 0
 
       - name: Decidir rebuild vs hotsync
-        id: gate
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
+        id: decidir
         env:
           # gh lo necesita para la API de compare; sin esto responde con un
           # error de ayuda y rc=4, y el gate no puede leer la lista de cambios.
           GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          function Add-Output($k, $v) {
-            [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$k=$v`n")
-          }
-          $before = '${{ github.event.before }}'
-          $after  = '${{ github.event.after }}'
+          set -uo pipefail
 
-          if ([string]::IsNullOrEmpty($before) -or $before -eq ('0' * 40)) {
-            Write-Output "primer push: rebuild (no hay contra que comparar)"
-            Add-Output 'modo' 'rebuild'
-            Add-Output 'motivo' 'sin referencia previa'
+          # `git diff` es el plan B: depende de que el clon tenga ese commit, y
+          # en un clon shallow "Could not access <sha>" lo rompe. La API de
+          # compare es autoritativa y no depende del clon, así que va primero.
+          # Si no hay forma de saber, se reconstruye: es el camino
+          # conservador, nunca adivinar "hotsync".
+          changed=()
+          diag=""
+
+          echo "── API de compare"
+          api_names=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" --jq '.files[].filename' 2>&1)
+          rc=$?
+          api_names=$(printf '%s\n' "$api_names" | grep -vE '^(gh:|To use GitHub CLI|error:|fatal:)' | grep -v '^[[:space:]]*$' || true)
+          diag="api rc=$rc archivos=$(printf '%s\n' "$api_names" | grep -c . || true)"
+
+          # La API corta en 300 archivos. Si los toca todos, la lista puede
+          # estar incompleta y no serviría para decidir: se reconstruye.
+          n_api=$(printf '%s\n' "$api_names" | grep -c . || true)
+          if [ "$rc" != "0" ] || [ "$n_api" -eq 0 ]; then
+            echo "── git diff (respaldo)"
+            changed=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null | grep -v '^[[:space:]]*$' || true)
+            diag="$diag | git nombres=$(printf '%s\n' "$changed" | grep -c . || true)"
+          else
+            changed=$(printf '%s\n' "$api_names")
+          fi
+
+          if [ "$n_api" -ge 300 ]; then
+            echo "DIAG gate: $diag -> >=300 archivos, la lista podría estar truncada; se reconstruye"
+            echo "modo=rebuild" >> "$GITHUB_OUTPUT"
+            echo "motivo=push demasiado grande para decidir por lista" >> "$GITHUB_OUTPUT"
             exit 0
-          }
+          fi
 
-          # `git diff` con ErrorActionPreference=Stop es problematico en
-          # Windows PowerShell 5.1: si el comando escribe en stderr (sha
-          # desconocida, repo shallow) se convierte en error terminante y el
-          # paso muere. Se aisla la llamada y, si no se puede diffear, se
-          # reconstruye: es el camino conservador. Nunca adivinar "hotsync".
-          # Que archivos cambio, con DIAGNOSTICO de verdad.
-          #
-          # Por que la API va PRIMERO: `git diff <before> <after>` depende de
-          # que el clon del runner tenga ese commit, y en este ServerVM no lo
-          # tenia ("error: Could not access <sha>"), asi que el gate caia a
-          # rebuild en cada push y el camino rapido nunca se ejercito. La API
-          # de compare es autoritativa y no depende del clon.
-          #
-          # Si la API no responde, se reintenta con git. Si no hay forma de
-          # saber, se reconstruye: es el camino conservador, nunca adivinar.
-          $changed = @()
-          $diag = ''
-
-          $apiNames = @()
-          try {
-            $ErrorActionPreference = 'Continue'
-            $cmp = & gh api "repos/$env:GITHUB_REPOSITORY/compare/$before...$after" --jq '.files[].filename' 2>&1
-            $ccode = $LASTEXITCODE
-            $ErrorActionPreference = 'Stop'
-            $apiNames = @($cmp | ForEach-Object { $_.ToString() } |
-                          Where-Object { $_.Trim() -ne '' -and $_ -notmatch '^(gh:|To use GitHub CLI|error:|fatal:)' })
-            $diag = "api rc=$ccode archivos=$($apiNames.Count)"
-          } catch {
-            $diag = "api lanzo excepcion: $($_.Exception.Message)"
-          }
-
-          # La API de compare corta en 300 archivos. Si los toca todos, la
-          # lista puede estar incompleta y no nos serviria para decidir:
-          # reconstruimos, que es lo seguro.
-          if ($apiNames.Count -ge 300) {
-            Write-Host "DIAG gate: $diag -> >=300 archivos, lista podria estar truncada; se reconstruye"
-            Add-Output 'modo' 'rebuild'
-            Add-Output 'motivo' 'push demasiado grande para decidir por lista'
+          n=$(printf '%s\n' "$changed" | grep -c . || true)
+          if [ "$n" -eq 0 ]; then
+            echo "DIAG gate: $diag"
+            echo "no se pudo determinar qué cambió; se reconstruye por seguridad"
+            echo "  (detalle arriba en 'DIAG gate')"
+            echo "modo=rebuild" >> "$GITHUB_OUTPUT"
+            echo "motivo=no se pudo determinar qué cambió" >> "$GITHUB_OUTPUT"
             exit 0
-          }
-          if ($apiNames.Count -gt 0) { $changed = $apiNames }
+          fi
 
-          if ($changed.Count -eq 0) {
-            try {
-              $ErrorActionPreference = 'Continue'
-              $out  = & git diff --name-only $before $after 2>&1
-              $code = $LASTEXITCODE
-              $ErrorActionPreference = 'Stop'
-              $lines = @($out | ForEach-Object { $_.ToString() })
-              $errs  = @($lines | Where-Object { $_ -match '^(fatal|error|warning):' })
-              $names = @($lines | Where-Object { $_ -notmatch '^(fatal|error|warning):' -and $_.Trim() -ne '' })
-              $diag  = "$diag | git rc=$code nombres=$($names.Count) stderr=$(($errs -join ' '))"
-              if ($code -eq 0 -and $names.Count -gt 0) { $changed = $names }
-            } catch {
-              $diag = "$diag | git lanzo excepcion: $($_.Exception.Message)"
-            }
-          }
+          echo "DIAG gate: $diag"
+          echo "Cambios en este push: $n"
+          printf '%s\n' "$changed" | sed 's/^/  /'
 
-          Write-Host "DIAG gate: $diag"
-          if ($changed.Count -eq 0) {
-            Write-Output "no se pudo determinar que cambio; se reconstruye por seguridad"
-            Write-Output "  (detalle arriba en 'DIAG gate')"
-            Add-Output 'modo' 'rebuild'
-            Add-Output 'motivo' 'no se pudo determinar que cambio'
-            exit 0
-          }
-          Write-Output "Cambios en este push: $($changed.Count)"
-          $changed | ForEach-Object { "  $_" }
+          # Lo que de verdad cambia la imagen. Todo lo demás se publica copiando
+          # al contenedor que ya corre, sin docker build.
+          tocaba=$(printf '%s\n' "$changed" \
+            | grep -E '^(Dockerfile|requirements\.txt|api/requirements\.txt)$' || true)
+          if [ -n "$tocaba" ]; then
+            echo "modo=REBUILD: cambiaron $(echo "$tocaba" | tr '\n' ' ')"
+            echo "modo=rebuild" >> "$GITHUB_OUTPUT"
+            echo "motivo=cambió un insumo de la imagen" >> "$GITHUB_OUTPUT"
+          else
+            echo "modo=HOTSYNC: sin rebuild"
+            echo "modo=hotsync" >> "$GITHUB_OUTPUT"
+            echo "motivo=solo cambió código y estáticos" >> "$GITHUB_OUTPUT"
+          fi
 
-          # Lo que de verdad cambia la imagen. Todo lo demas se publica
-          # copiando al contenedor que ya corre, sin docker build.
-          $imagen = @("Dockerfile", "requirements.txt", "api/requirements.txt")
-          $tocaba = $changed | Where-Object {
-            $f = $_
-            $imagen | Where-Object { $f -eq $_ -or $f -like "$_/*" }
-          }
+  deploy:
+    # Etiqueta propia del runner de WebbApps (Linux). NO usar `self-hosted`: con
+    # esa etiqueta el job podría caer en el runner Windows viejo, que es
+    # justamente de donde viene este cambio.
+    runs-on: admon-deploy
+    timeout-minutes: 30
+    needs: gate
 
-          if ($tocaba) {
-            Write-Output "modo=REBUILD: cambiaron $($tocaba -join ', ')"
-            Add-Output 'modo' 'rebuild'
-            Add-Output 'motivo' 'cambio un insumo de la imagen'
-          } else {
-            Write-Output "modo=HOTSYNC: sin rebuild"
-            Add-Output 'modo' 'hotsync'
-            Add-Output 'motivo' 'solo cambio codigo y estaticos'
-          }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # El hotsync/rebuild necesitan el código, incluido dist/ tras compilar.
+          fetch-depth: 0
 
       - name: Resumen
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
         run: |
-          $s = $env:GITHUB_STEP_SUMMARY
-          [IO.File]::AppendAllText($s, "### Deploy de Admon`n`n")
-          [IO.File]::AppendAllText($s, "- **modo**: ${{ steps.gate.outputs.modo }}`n")
-          [IO.File]::AppendAllText($s, "- **por que**: ${{ steps.gate.outputs.motivo }}`n")
-          [IO.File]::AppendAllText($s, "- **commit**: ${{ github.sha }}`n")
+          {
+            echo "### Deploy de Admon → WebbApps (10.188.141.17)"
+            echo ""
+            echo "- **modo**: ${{ needs.gate.outputs.modo }}"
+            echo "- **por qué**: ${{ needs.gate.outputs.motivo }}"
+            echo "- **runner**: ${{ runner.name }}"
+            echo "- **commit**: ${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Hotsync
-        if: steps.gate.outputs.modo == 'hotsync'
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $bash = 'C:\Program Files\Git\bin\bash.exe'
-          if (-not (Test-Path $bash)) { throw "Git Bash no esta en $bash" }
-          & $bash deploy/hotsync.sh
-          if ($LASTEXITCODE -ne 0) { throw "hotsync.sh fallo (rc=$LASTEXITCODE)" }
-
-      # ── Camino completo ────────────────────────────────────────────────────
-      # El rebuild NO se corre desde el checkout del runner: el script espera el
-      # clon canónico (C:\admon) y así el contenedor se recrea con la misma
-      # configuración de siempre (puertos, red, volumes y credenciales que saca
-      # del contenedor actual). Y va por schtasks, no por SSH, porque Windows
-      # mata los procesos hijos al cerrarse la sesión.
-      # El rebuild real NO corre desde este job: lo lanza la tarea programada
-      # AdmonBuild (schtasks), o sea un proceso de Windows hijo de otra
-      # sesión. Eso ROMPE la cadena de entorno: aunque este job tenga el secret
-      # en $env, build.ps1 no lo ve. Por eso el secret se deja en un archivo
-      # en disco (C:\admon\.secrets\panel_token) y build.ps1 lo lee de ahí.
-      # El archivo queda FUERA de git (.gitignore) y solo en el ServerVM.
-      - name: Depositar HUB_PANEL_TOKEN para el rebuild
-        if: steps.gate.outputs.modo == 'rebuild'
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
-        env:
-          PANEL_TOKEN: ${{ secrets.HUB_PANEL_TOKEN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not $env:PANEL_TOKEN) {
-            Write-Host '::warning::secrets.HUB_PANEL_TOKEN vacio; el rebuild seguira sin el (la app avisa en la UI)'
-            exit 0
-          }
-          $dir = 'C:\admon\.secrets'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          # Se escribe el valor pelado: build.ps1 lo lee y lo pasa con -e.
-          # El archivo no se imprime ni se sube a ningun lado.
-          Set-Content -Path "$dir\panel_token" -Value $env:PANEL_TOKEN -Encoding ascii -NoNewline
-          # Git no debe verlo nunca.
-          $gi = 'C:\admon\.gitignore'
-          if (-not (Select-String -Path $gi -Pattern '^\.secrets/' -Quiet -ErrorAction SilentlyContinue)) {
-            Add-Content -Path $gi -Value "`n# secretos locales del deploy (nunca al repo)`n.secrets/"
-          }
-          Write-Host ('HUB_PANEL_TOKEN depositado en {0}\panel_token ({1} bytes)' -f $dir, $env:PANEL_TOKEN.Length)
+        if: needs.gate.outputs.modo == 'hotsync'
+        run: bash deploy/hotsync-linux.sh
 
       - name: Rebuild
-        if: steps.gate.outputs.modo == 'rebuild'
-        shell: 'powershell -ExecutionPolicy Bypass -command ". {0}"'
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $logPath = 'C:\admon\build.log'
-
-          # Diagnostico: ante cualquier fallo queremos ver que paso, no solo
-          # un "no mostro FIN rc=". Se imprime dentro del log del job.
-          function Show-Diag {
-            Write-Host "=== DIAGNOSTICO (AdmonBuild) ==="
-            try {
-              if (Test-Path $logPath) {
-                $f = Get-Item $logPath
-                Write-Host ("build.log - modificado " + $f.LastWriteTime + " - " + $f.Length + " bytes")
-                Get-Content $logPath -Tail 40 | ForEach-Object { Write-Host $_ }
-              } else {
-                Write-Host "build.log NO EXISTE (el build no llego a escribir nada)"
-              }
-              Write-Host "--- estado de la tarea ---"
-              Write-Host (schtasks /query /tn AdmonBuild /fo LIST /v 2>&1 | Out-String)
-              Write-Host "--- contenedores ---"
-              Write-Host (docker ps -a --format "{{.Names}} | {{.Status}}" 2>&1 | Out-String)
-            } catch {
-              Write-Host ("diagnostico fallo: " + $_.Exception.Message)
-            }
-            Write-Host "=== FIN DIAGNOSTICO ==="
-          }
-
-          # Un "FIN rc=" viejo NO cuenta. build.log persiste entre builds, asi
-          # que si el build no lo trunca, el primer poll matchearia la linea del
-          # build ANTERIOR y dariamos por bueno un build que nunca ocurrio.
-          # Lo movemos aside: cualquier linea que encontremos es de ESTE build.
-          if (Test-Path $logPath) {
-            Move-Item $logPath "$logPath.prev" -Force
-            Write-Host "build.log anterior movido a build.log.prev"
-          }
-
-          Write-Host "Lanzando AdmonBuild (schtasks)..."
-          schtasks /run /tn AdmonBuild
-          if ($LASTEXITCODE -ne 0) { Show-Diag; throw "no se pudo lanzar AdmonBuild" }
-
-          Write-Host "Esperando a que termine (build.log)..."
-          $rc = $null
-          for ($i = 0; $i -lt 90; $i++) {
-            Start-Sleep -Seconds 10
-            $log = Get-Content $logPath -ErrorAction SilentlyContinue
-            $line = $log | Select-String 'FIN rc=(\d+)' | Select-Object -Last 1
-            if ($line) {
-              Get-Content $logPath -Tail 25 | ForEach-Object { Write-Host $_ }
-              $rc = [int]$line.Matches[0].Groups[1].Value
-              break
-            }
-          }
-          if ($null -eq $rc) { Show-Diag; throw "build.log no mostro 'FIN rc=' a tiempo" }
-          if ($rc -ne 0) { Show-Diag; throw "el rebuild fallo (rc=$rc)" }
-          Write-Host "OK - imagen reconstruida y contenedor recreado"
+        if: needs.gate.outputs.modo == 'rebuild'
+        run: bash deploy/rebuild-linux.sh

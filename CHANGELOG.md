@@ -3,6 +3,26 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.7.1] - 2026-10-05
+
+### Corregido
+- **El deploy automático volvía a publicar donde nadie llega.** El workflow
+  corría en un runner **Windows del ServerVM (10.188.141.31)**, que ya no publica
+  la app: GitHub reportaba `success` mientras los usuarios seguían con la
+  versión vieja. Ahora corre en **WebbApps (Debian, 10.188.141.17)**, que es donde
+  está la app:
+  - Runner nuevo `WebbApps-Runner` en WebbApps (Linux), con la etiqueta
+    `admon-deploy` y servicio systemd `actions-runner-admonapp` para que no se
+    caiga al reiniciar. Se pidió `admon-deploy` y no `self-hosted` a propósito:
+    con `self-hosted` el job podía caer en el runner Windows viejo.
+  - El gate (decidir rebuild vs hotsync) pasó a `ubuntu-latest` en bash: ya no
+    depende de PowerShell 5.1 ni de que ningún runner esté vivo.
+  - Scripts nuevos `deploy/hotsync-linux.sh` y `deploy/rebuild-linux.sh`. Sin
+    cygpath ni MSYS: el frontend se compila con node dentro de un contenedor y
+    en un directorio temporal, para no dejar `node_modules` de root en el clon.
+  - La configuración del contenedor sigue saliendo de `/opt/apps/admon/app.conf`
+    en el servidor (puertos, red, credenciales): no viaja en el repo.
+
 ## [1.7.0] - 2026-10-05
 
 ### Corregido
