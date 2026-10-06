@@ -137,6 +137,12 @@ Convención al aplicar (no hay runner todavía):
 
 ## Avisos push (los avisos al teléfono)
 
+> **El contrato completo está en `ECCSA-Shell/docs/PUSH.md`** (repo
+> `hector1516/ECCSA-Shell`, vendorizado en `WorkersAdmon/shell/docs/PUSH.md`):
+> las tres condiciones de iOS, el payload, los handlers del service worker, los
+> endpoints y la receta para añadir push a otra app. Lo de aquí es solo lo que
+> le toca a Admon.
+
 Cuatro endpoints en `api/main.py` (`vapid-public-key`, `subscribe`,
 `unsubscribe`, `suscripciones`, `prueba`), el cliente en `src/lib/push.js`, los
 handlers `push`/`notificationclick` en `public/sw.js` y la tarjeta de
