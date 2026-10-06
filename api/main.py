@@ -6,6 +6,7 @@ from api.pdf_remision import build_remision_pdf
 from api.lugar import lugar_de
 from api import sat_helper
 from api import usuarios_foto as _foto_usuario
+from api import ficha_nfc as _ficha_nfc
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 import pymssql
@@ -118,6 +119,10 @@ class UserInfo(BaseModel):
     # es dato personal y solo se entrega en la ficha del usuario.
     puesto: str = ""
     tiene_foto: bool = False
+    # Enlace publico de la tarjeta NFC (app colaboradores.ecc-sa.com.mx). Es el
+    # mismo token que esa app calcula: ver api/ficha_nfc.py para el contrato de
+    # la derivacion, que esta escrita en los dos repos.
+    ficha_url: str = ""
 
 
 # --- Auth Dependency ---
@@ -811,6 +816,31 @@ async def api_list_usuarios(current_user: dict = Depends(get_current_user)):
 # --- Detalle / edición de usuario (espejo del Administrador de Usuarios del HUB) ---
 
 # Columnas de HUB_Users administrables (mismo orden que get_all_hub_users del HUB)
+def _config_ficha(connect_fn):
+    """(secreto, base_url) de las fichas NFC. Lee HUB_Config una vez.
+
+    Se lee aquí y no por usuario: son dos valores constantes para toda la
+    pantalla, y meterlos en el SELECT de cada usuario sería una ida a la BD por
+    persona. Si falta el secreto se devuelve ("", "") y el frontend simply no
+    muestra el enlace, en vez de romper la lista.
+    """
+    try:
+        conn = connect_fn()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT Clave, Valor FROM HUB_Config "
+            "WHERE Clave IN ('colab_ficha_secreto', 'colab_ficha_base_url')"
+        )
+        valores = {k: (v or "").strip() for k, v in cur.fetchall()}
+        conn.close()
+        return (valores.get("colab_ficha_secreto", ""),
+                valores.get("colab_ficha_base_url", "")
+                or _ficha_nfc.BASE_POR_DEFECTO)
+    except Exception as e:
+        print(f"[ficha_nfc] no se pudo leer la config: {e}")
+        return "", _ficha_nfc.BASE_POR_DEFECTO
+
+
 _USER_COLS = (
     "Id, Email, Nombre, Password, Activo, FechaIngreso, CurpRfc, "
     "AccesoCotizaciones, AccesoVM, AccesoConfiguracion, AccesoUsuarios, AccesoReportes, "
@@ -871,6 +901,35 @@ async def get_user_detail(user_id: int, current_user: dict = Depends(get_current
         if not row:
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
         return _user_row_to_dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+@app.get("/api/users/{user_id:int}/ficha")
+async def get_user_ficha(user_id: int, current_user: dict = Depends(get_current_user)):
+    """Enlace publico de la tarjeta NFC de un usuario, para copiarlo.
+
+    Se devuelve aqui y no se mete en `/api/users` porque la lista es de todos los
+    usuarios y el enlace solo hace falta en el detalle, que es donde se esta
+    grabando la tarjeta. Asi tampoco viaja en cada listado.
+    """
+    _require_admin(current_user)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Id, Nombre FROM HUB_Users WHERE Id = %s", (int(user_id),))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        secreto, base = _config_ficha(get_connection)
+        return {
+            "id": row[0],
+            "slug": _ficha_nfc.slug_de(row[1], row[0], secreto),
+            "url": _ficha_nfc.url_de(row[1], row[0], secreto, base),
+        }
     except HTTPException:
         raise
     except Exception as e:

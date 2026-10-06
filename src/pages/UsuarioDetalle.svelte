@@ -83,6 +83,41 @@
 
 	// Teléfono / MAC: se guarda en HUB_NetworkDevices (la tabla del escáner de
 	// red 📡 que mide entradas y salidas de la oficina), vinculada por IdUsuario.
+	// 🎴 Enlace de la tarjeta NFC (app colaboradores.ecc-sa.com.mx). El token se
+	// deriva en el backend (api/ficha_nfc.py) porque el secreto no debe estar en
+	// el navegador: con el secreto en el cliente, cualquiera que abriera las
+	// herramientas de desarrollo podría derivar el enlace de cualquier persona.
+	let fichaUrl = $state('');
+	let copiado = $state(false);
+
+	async function cargarFicha() {
+		try {
+			const d = await api.get(`/users/${id}/ficha`);
+			fichaUrl = d?.url || '';
+		} catch (e2) {
+			console.error('Error cargando la ficha NFC:', e2);
+			fichaUrl = '';
+		}
+	}
+
+	async function copiarFicha() {
+		try {
+			await navigator.clipboard.writeText(fichaUrl);
+			copiado = true;
+			setTimeout(() => (copiado = false), 1800);
+		} catch {
+			// Sin permiso de portapapeles (o sin HTTPS): se selecciona el texto.
+			const el = document.querySelector('.ficha-url');
+			if (el) {
+				const rango = document.createRange();
+				rango.selectNodeContents(el);
+				const sel = window.getSelection();
+				sel.removeAllRanges();
+				sel.addRange(rango);
+			}
+		}
+	}
+
 	let macTel = $state('');
 	let macNombre = $state('');
 	let tel = $state(null); // estado del dispositivo + presencia (AQUI/FUERA)
@@ -235,6 +270,9 @@
 			// 📷 Foto del usuario (HUB_UsuariosFotos). También tolerant: si no
 			// hay foto o falla, se queda el avatar de iniciales.
 			await cargarFoto();
+			// 🎴 Enlace NFC. Tolerant: si falta el secreto en HUB_Config, la ficha
+			// simplemente no se muestra y el resto de la pantalla sigue igual.
+			await cargarFicha();
 		} catch (e) {
 			console.error('Error cargando usuario:', e);
 			error = e.message === 'Sesión expirada' ? e.message : `No se pudo cargar: ${e.message || 'sin detalle'}`;
@@ -373,6 +411,43 @@
 					{/if}
 				</div>
 			</div>
+		</div>
+
+		<!-- 🎴 Tarjeta NFC. El enlace es FIJO y no cambia nunca: sale del Id del
+		     usuario, así que la tarjeta puede grabarse una vez y seguir valiendo
+		     aunque la persona cambie de nombre, de foto o de puesto. -->
+		<div class="card" style="margin-bottom: 0.75rem;">
+			<div class="card-title">🎴 Tarjeta NFC</div>
+			{#if fichaUrl}
+				<p class="hint" style="margin: 0 0 0.6rem;">
+					Graba este enlace en la tarjeta. Al tocarla con el móvil se abre la
+					ficha con el contacto, el WhatsApp y la dirección de la empresa.
+				</p>
+				<div class="ficha-row">
+					<code class="ficha-url">{fichaUrl}</code>
+					<button class="btn btn-sm" on:click={copiarFicha}>
+						{copiado ? '✅ Copiado' : '📋 Copiar'}
+					</button>
+				</div>
+				<div class="ficha-extra">
+					<a class="btn btn-sm btn-secondary" href={fichaUrl} target="_blank" rel="noopener">
+						👁️ Ver ficha
+					</a>
+					<a
+						class="btn btn-sm btn-secondary"
+						href={`${fichaUrl}/contacto.vcf`}
+						target="_blank"
+						rel="noopener"
+					>
+						👤 vCard
+					</a>
+				</div>
+			{:else}
+				<p class="hint" style="margin: 0;">
+					Sin enlace: falta el secreto <code>colab_ficha_secreto</code> en
+					<code>HUB_Config</code> (lo define la migración <code>0060</code>).
+				</p>
+			{/if}
 		</div>
 
 		<div class="card" style="margin-bottom: 0.75rem;">
