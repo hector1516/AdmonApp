@@ -366,7 +366,8 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
         if not vk or not vk[0] or not vk[1]:
             conn.close()
             raise HTTPException(status_code=500, detail="VAPID no configurado.")
-        pub_key, priv_key = vk[0].strip(), vk[1].strip()
+        pub_key = vk[0].strip()
+        priv_key = _normalizar_vapid_privada(vk[1])
         # Destinatarios
         if body.all:
             cursor.execute("SELECT Email FROM HUB_Users WHERE Activo = 1")
@@ -383,8 +384,15 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
             conn.close()
             return {"sent": 0}
         eph = ",".join(["%s"] * len(emails))
+        # HUB_PushSuscripciones, NO HUB_PushSubscriptions: la vieja no tiene
+        # columna App (por eso el aviso de una app caería dentro del service
+        # worker de otra) y además está vacía, porque a ella solo escribe
+        # `mcp_server` y el navegador de Admon se suscribe en la nueva. Con la
+        # vieja, este botón decía "0 usuario(s)" siempre.
         cursor.execute(
-            f"SELECT Endpoint, P256dhKey, AuthKey FROM HUB_PushSubscriptions WHERE UserEmail IN ({eph})",
+            f"SELECT Endpoint, P256dhKey, AuthKey FROM HUB_PushSuscripciones "
+            f"WHERE App = 'admon' AND Activo = 1 AND IdUsuario IN "
+            f"(SELECT Id FROM HUB_Users WHERE LTRIM(RTRIM(Email)) IN ({eph}))",
             tuple(emails),
         )
         subs = cursor.fetchall()
@@ -402,7 +410,8 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
             except WebPushException as e:
                 if e.response is not None and e.response.status_code in (410, 404):
                     try:
-                        cursor.execute("DELETE FROM HUB_PushSubscriptions WHERE Endpoint = %s", (endpoint,))
+                        cursor.execute("DELETE FROM HUB_PushSuscripciones WHERE Endpoint = %s", (endpoint,))
+                        conn.commit()
                     except Exception:
                         pass
             except Exception:
@@ -414,6 +423,287 @@ async def api_push_send(body: PushSendRequest, current_user: dict = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+# ─── Push: suscripción de la PWA ─────────────────────────────────────────────
+# Estos cuatro endpoints son el otro lado de `notif_dispatch.py` (WorkersAdmon),
+# que es quien ENVÍA los avisos. Aquí solo se guarda de qué dispositivo se trata.
+#
+# POR QUÉ LA TABLA ES `HUB_PushSuscripciones` Y NO `HUB_PushSubscriptions`
+# --------------------------------------------------------------------------
+# La vieja no tiene columna de app. Una suscripción creada desde
+# admon.ecc-sa.com.mx quedaría indistinguible de una creada desde
+# field.ecc-sa.com.mx, para el mismo usuario: al mandar un aviso, la librería
+# elegiría todas sus suscripciones y el aviso de kilómetros de Field aparecería
+# dentro de Admon. Notificaciones cruzadas entre apps, que es justo lo que hace
+# que la gente desactive los permisos. La nueva (migración 0056) sí lleva `App`.
+#
+# La vieja se sigue usando en /api/push/send y no se toca.
+
+APP_PUSH = "admon"
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str
+    keys: dict = {}
+    plataforma: str = ""
+
+
+def _vapid_publica():
+    """La clave PÚBLICA de VAPID, que el navegador necesita para suscribirse.
+
+    Solo se entrega la pública (es pública por definición: va dentro del bundle
+    de la app de cualquiera). La privada nunca sale del servidor.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT VapidPublicKey FROM HUB_PushConfig WHERE Id = 1")
+        row = cursor.fetchone()
+        return (row[0] or "").strip() if row and row[0] else ""
+    finally:
+        conn.close()
+
+
+def _detectar_plataforma(user_agent: str) -> str:
+    """'iOS' | 'Android' | 'Escritorio'. Solo informativo: el panel dice
+    '3 iPhone, 1 PC' en vez de un número pelado."""
+    ua = (user_agent or "").lower()
+    if "iphone" in ua or "ipad" in ua or "ipod" in ua:
+        return "iOS"
+    # iPadOS 13+ se reporta como Macintosh, pero tiene puntos táctiles; aquí solo
+    # llega el User-Agent, así que se resuelve por la palabra "Macintosh".
+    if "macintosh" in ua:
+        return "iOS"
+    if "android" in ua:
+        return "Android"
+    return "Escritorio"
+
+
+@app.get("/api/push/vapid-public-key")
+async def api_push_vapid(current_user: dict = Depends(get_current_user)):
+    """La clave pública de VAPID. El cliente la pide antes de suscribirse."""
+    publica = _vapid_publica()
+    if not publica:
+        raise HTTPException(status_code=500, detail="VAPID no configurado.")
+    return {"publicKey": publica}
+
+
+@app.post("/api/push/subscribe")
+async def api_push_subscribe(request: Request, body: PushSubscribeRequest,
+                             current_user: dict = Depends(get_current_user)):
+    """
+    Registra (o re-registra) la suscripción de ESTE dispositivo.
+
+    Es un UPSERT por endpoint. La re-registración es lo que hace `revincular()`
+    en el cliente: la suscripción pertenece al service worker y sobrevive al
+    cierre de sesión, así que si el usuario entra con otra cuenta en el mismo
+    teléfono el endpoint seguiría apuntando al usuario anterior.
+
+    SQL Server 2014 no tiene ON CONFLICT: se hace UPDATE y, si no tocó filas,
+    INSERT. Un MERGE haría lo mismo en una sentencia, pero con triggers es
+    notoriously difícil de depurar.
+    """
+    endpoint = (body.endpoint or "").strip()
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="Suscripción vacía")
+    if len(endpoint) > 2000:
+        raise HTTPException(status_code=400, detail="Suscripción demasiado larga")
+    p256dh = str((body.keys or {}).get("p256dh") or "").strip()[:500]
+    auth = str((body.keys or {}).get("auth") or "").strip()[:500]
+    if not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="Suscripción incompleta")
+
+    plataforma = (body.plataforma or "").strip()[:20] or _detectar_plataforma(
+        request.headers.get("User-Agent", ""))
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE HUB_PushSuscripciones "
+            "SET IdUsuario = %s, P256dhKey = %s, AuthKey = %s, Plataforma = %s, Activo = 1, "
+            "    UltimoUso = GETDATE() "
+            "WHERE Endpoint = %s",
+            (current_user["id"], p256dh, auth, plataforma, endpoint),
+        )
+        if cursor.rowcount == 0:
+            try:
+                cursor.execute(
+                    "INSERT INTO HUB_PushSuscripciones "
+                    "(App, IdUsuario, Endpoint, P256dhKey, AuthKey, Plataforma, Creado, Activo) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, GETDATE(), 1)",
+                    (APP_PUSH, current_user["id"], endpoint, p256dh, auth, plataforma),
+                )
+            except Exception:
+                # Carrera entre dos POST del mismo dispositivo: si otra petición
+                # ganó, el UPDATE de arriba ya lo dejó bien. No es un error para
+                # el usuario.
+                cursor.execute(
+                    "UPDATE HUB_PushSuscripciones SET IdUsuario = %s, Activo = 1 "
+                    "WHERE Endpoint = %s",
+                    (current_user["id"], endpoint),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "plataforma": plataforma}
+
+
+@app.post("/api/push/unsubscribe")
+async def api_push_unsubscribe(body: PushSubscribeRequest,
+                               current_user: dict = Depends(get_current_user)):
+    """Da de baja SOLO este dispositivo. Las filas se marcan Activo=0 en vez de
+    borrarse: si el usuario vuelve a entrar, la fila sigue ahí y reactivarla es
+    un UPDATE en vez de un INSERT."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE HUB_PushSuscripciones SET Activo = 0 "
+            "WHERE Endpoint = %s AND IdUsuario = %s",
+            ((body.endpoint or "").strip(), current_user["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/push/suscripciones")
+async def api_push_suscripciones(current_user: dict = Depends(get_current_user)):
+    """Dispositivos de ESTE usuario, para poder decir 'este teléfono sí, esa
+    laptop no'."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT Id, Plataforma, Creado, UltimoUso FROM HUB_PushSuscripciones "
+            "WHERE IdUsuario = %s AND App = %s AND Activo = 1 ORDER BY Creado DESC",
+            (current_user["id"], APP_PUSH),
+        )
+        filas = cursor.fetchall()
+        return {"suscripciones": [
+            {"id": f[0], "plataforma": f[1] or "?", "creado": str(f[2]),
+             "ultimoUso": str(f[3]) if f[3] else None}
+            for f in filas]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/push/prueba")
+async def api_push_prueba(current_user: dict = Depends(get_current_user)):
+    """
+    Manda un push de prueba a los dispositivos de QUIEN LO PIDIÓ.
+
+    A propósito NO es un broadcast: el botón "🧪 Enviar prueba" de Config.svelte
+    tiene que probar el teléfono de quien lo apretó, no avisar a todo el mundo de
+    que alguien está probando. Por eso va por IdUsuario y no por un flag de "todos".
+
+    Se manda con la misma ruta de envío que usa el worker (`eccsa_db` del
+    WorkersAdmon no está en este contenedor), replicando su formato de payload:
+    `badge_count` en vez de `badge` porque en iOS `badge` es un NÚMERO y en
+    Android la URL de una imagen, y lo traduce el service worker.
+    """
+    try:
+        import json
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        raise HTTPException(status_code=500, detail="pywebpush no instalado en el servidor.")
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT VapidPrivateKey FROM HUB_PushConfig WHERE Id = 1")
+        fila = cursor.fetchone()
+        priv_key = (fila[0] or "").strip() if fila and fila[0] else ""
+        if not priv_key:
+            raise HTTPException(status_code=500, detail="VAPID no configurado.")
+        # La privada tiene que estar en base64url de los 32 bytes CRUDOS. Si
+        # alguien la dejó en PEM o DER, pywebpush falla siempre y el mensaje no
+        # dice por qué (le pasó a Mailbox).
+        priv_key = _normalizar_vapid_privada(priv_key)
+
+        cursor.execute(
+            "SELECT Endpoint, P256dhKey, AuthKey FROM HUB_PushSuscripciones "
+            "WHERE IdUsuario = %s AND App = %s AND Activo = 1",
+            (current_user["id"], APP_PUSH))
+        subs = cursor.fetchall()
+    finally:
+        conn.close()
+
+    if not subs:
+        return {"sent": 0, "detail": "No hay ningún dispositivo suscrito en este equipo."}
+
+    payload = json.dumps({
+        "title": "🔔 Admon · aviso de prueba",
+        "body": "Si lees esto, las notificaciones de Admon funcionan en este equipo.",
+        "url": "/config",
+        "tag": "admon-prueba",
+        "badge_count": 1,
+    })
+    enviados, fallidos = 0, 0
+    for endpoint, p256dh, auth_key in subs:
+        try:
+            webpush(
+                subscription_info={"endpoint": endpoint,
+                                   "keys": {"p256dh": p256dh, "auth": auth_key}},
+                data=payload,
+                vapid_private_key=priv_key,
+                vapid_claims={"sub": "mailto:robot@ecc-sa.com.mx"},
+            )
+            enviados += 1
+        except WebPushException as e:
+            # 404/410 = la suscripción murió (se desinstaló la PWA). Se borra,
+            # igual que hace el worker, para no reintentar contra la nada.
+            if e.response is not None and e.response.status_code in (410, 404):
+                conn = get_connection()
+                try:
+                    c2 = conn.cursor()
+                    c2.execute("DELETE FROM HUB_PushSuscripciones WHERE Endpoint = %s",
+                               (endpoint,))
+                    conn.commit()
+                finally:
+                    conn.close()
+            fallidos += 1
+        except Exception:
+            fallidos += 1
+
+    return {"sent": enviados, "failed": fallidos,
+            "detail": f"{enviados} enviado(s), {fallidos} sin éxito."}
+
+
+def _normalizar_vapid_privada(priv: str) -> str:
+    """Deja la clave privada en el formato que `pywebpush` sí entiende.
+
+    Quiere base64url de los 32 bytes CRUDOS. Si quedó una PEM o un DER en
+    base64, el envío falla SIEMPRE y el error que sale no dice nada útil: parece
+    que el push no llegó a ningún dispositivo.
+    """
+    import base64
+    original = (priv or "").strip()
+    if not original:
+        return original
+
+    def _b64d(texto):
+        pad = "=" * ((4 - len(texto) % 4) % 4)
+        return base64.urlsafe_b64decode((texto + pad).replace("-", "+").replace("_", "/"))
+
+    try:
+        if len(_b64d(original)) == 32:
+            return original
+    except Exception:
+        pass
+    try:
+        from cryptography.hazmat.primitives import serialization
+        if "BEGIN" in original:
+            clave = serialization.load_pem_private_key(original.encode(), password=None)
+        else:
+            clave = serialization.load_der_private_key(_b64d(original), password=None)
+        crudo = clave.private_numbers().private_value.to_bytes(32, "big")
+        return base64.urlsafe_b64encode(crudo).rstrip(b"=").decode()
+    except Exception:
+        return original
 
 # --- User Endpoints ---
 

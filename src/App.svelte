@@ -80,6 +80,30 @@
 		if ($auth.user) prefetchOffline();
 	});
 
+	// ── Notificaciones push ─────────────────────────────────────────────────
+	// El service worker, al tocar una notificación, NO abre una ventana nueva:
+	// en iOS eso deja la PWA en blanco. Enfoca la pestaña que ya está abierta y
+	// le pasa la ruta por postMessage (ver public/sw.js). Si nadie escucha este
+	// mensaje, el toque "hace nada": la app se enfoca pero no navega, y parece
+	// que el aviso está roto.
+	function onMensajeSW(event) {
+		const d = event.data || {};
+		if (d.type === 'FORCE_RELOAD') {
+			window.location.reload();
+			return;
+		}
+		if (d.type === 'ABRIR_RUTA' && d.url) {
+			navigate(d.url);
+			// Se limpia el badge: si el usuario abrió un aviso, ya lo está viendo.
+			navigator.serviceWorker?.controller?.postMessage({ type: 'LIMPIAR_BADGE' });
+		}
+	}
+
+	onMount(() => {
+		navigator.serviceWorker?.addEventListener('message', onMensajeSW);
+		return () => navigator.serviceWorker?.removeEventListener('message', onMensajeSW);
+	});
+
 	// ── Banner común ECCSA-Shell ─────────────────────────────────────────────
 	// El componente es del shell y no sabe nada de Admon: el estado, el usuario
 	// y el clic le llegan por props, y `fetcher` le aporta la cabecera Bearer

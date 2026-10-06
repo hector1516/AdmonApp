@@ -3,6 +3,45 @@
 > App de administración ECCSA (`AdmonApp`). Versión y novedades visibles para
 > el usuario en `public/changelog.json` y en el popup 📋 del shell.
 
+## [1.7.4] - 2026-10-06
+
+### Agregado
+- **Avisos al teléfono** desde Configuración: una tarjeta nueva para activar las
+  notificaciones en este equipo, ver en qué equipos están registradas y mandar un
+  🧪 aviso de prueba. Los avisos los decide `notif_dispatch.py` en WorkersAdmon
+  (panel → módulo "📣 Avisos"): reporte firmado, kilometraje sin registrar, ticket
+  OxxoGas, cotización firmada y cotización facturada.
+- **Solo los avisos de los módulos que tienes abiertos.** El reparto sale de tus
+  permisos, no de una lista: quien puede abrir Cotizaciones es quien recibe el
+  aviso de una cotización firmada.
+- **Fuera de lunes a viernes de 9:00 a 18:30 no suena nada.** Lo que se acumula
+  sale junto al siguiente día laboral, en un solo resumen.
+- **El aviso dice quién lo causó** ("Rosa firmó el reporte RS-123"), no solo que
+  pasó algo.
+- **Endpoints** `GET /api/push/vapid-public-key`, `POST /api/push/subscribe`,
+  `POST /api/push/unsubscribe`, `GET /api/push/suscripciones` y
+  `POST /api/push/prueba`.
+
+### Corregido
+- **El botón "📣 Enviar aviso push" no le llegaba a nadie.** Buscaba las
+  suscripciones en `HUB_PushSubscriptions`, la tabla vieja: está vacía (a ella
+  solo escribe `mcp_server`) y no tiene columna de app. Ahora usa
+  `HUB_PushSuscripciones`, la que sí distingue el origen.
+- **Una clave VAPID guardada en PEM o DER hacía fallar TODOS los push** con un
+  error que no dice por qué: `pywebpush` quiere la privada como base64url de los
+  32 bytes crudos. Ahora se convierte sola.
+- **Tocar una notificación no llevaba a ninguna parte.** El service worker
+  enfoca la pestaña que ya está abierta (en iOS abrir una ventana nueva desde una
+  notificación deja la PWA en blanco) y le pasa la ruta por `postMessage`, pero
+  nadie escuchaba ese mensaje.
+
+### Notas para iPhone
+- Requiere iOS 16.4 o superior y la app **instalada** en la pantalla de inicio.
+- El permiso solo se pregunta desde un toque, nunca al abrir la app.
+- En iOS el permiso nunca llega a "bloqueado": si no lo aceptas se queda en
+  "sin decidir" para siempre, por eso la pantalla pide el motivo exacto en vez de
+  decir "no se pudo".
+
 ## [1.7.3] - 2026-10-05
 
 ### Corregido

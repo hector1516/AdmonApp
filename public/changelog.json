@@ -1,24 +1,12 @@
 {
   "app": "admon",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "cambios": [
-    "📦 Cotizaciones Materiales: ya no tarda 26 s ni dice “Sin conexión”, y el listado ya no infla el total al doble.",
-    "🕘 Asistencia: el aviso de “el escáner no reporta” ya no salía de mentira — ahora se mide el ciclo del escáner, no las entradas y salidas.",
-    "⚙️ Administración: el módulo de usuarios ahora tiene pestañas: 🕘 Asistencia (quién llegó, sigue aquí o ya se fue; refresco cada minuto) y 👥 Administración.",
-    "📊 Registro de Reportes: nueva pestaña Excel para exportar reportes firmados del mismo cliente al formato de cotizaciones (folio, horas y descripción).",
-    "👥 Usuarios: recuadros más grandes y mejor acomodados (lista en 2 columnas, ficha con campos en 2 columnas) y con la foto del usuario visible.",
-    "👤 Usuarios: nuevo NSS y Puesto, y foto por usuario (avatar en la lista, ficha y disponible por API para otras apps).",
-    "🧾 Partidas de cotizaciones: nuevo campo artículo genérico (\"disyuntor\"); lo sugiere el 🤖 y el PDF lo imprime antes del código SAT y de la unidad.",
-    "📺 Nueva pestaña Pantalla de la TV: control remoto del kiosco (ver/avanzar/pausar/seguir) y subida de la imagen de portada que muestra la pantalla.",
-    "📊 Nuevo botón Dashboard en el menú, con pestañas: Notas y 📺 Pantalla de la TV (control remoto del kiosco + imagen de portada).",
-    "📡 En Usuarios puedes anotar la MAC del teléfono: la lista muestra su badge 📡 y la ficha indica si está en la oficina y su última entrada/salida.",
-    "📝 Nuevo módulo Notas: notas del equipo con autor, color, 📌 fijar y editor; se capturan en Admon y aparecen solas en la pantalla 📌 del Dashboard de la oficina.",
-    "🤖 ECCSA IA: ahora es una sola conversación continua con historial, y su botón está directo en el Dashboard.",
-    "🚗 En Kilómetros, tocar un vehículo abre su detalle en una página propia (antes en ventana emergente) y se puede compartir como enlace.",
-    "🕒 Los registros de kilometraje guardan siempre la hora de México (antes algunos salían 6 horas adelantados) y ya no dejan capturar fechas futuras.",
-    "📄 Paginación de 100 en 100 en todos los listados, y velocidad: Tickets OxxoGas, Legends, Inventario y la búsqueda de cotizaciones ya no congelan la app.",
-    "🔧 El deploy automático ya publica en el servidor correcto (WebbApps): antes informaba éxito y en realidad no llegaba a los usuarios.",
-    "🖼️ La pantalla de portada apuntaba al servidor viejo (ya no respondía) y el workflow del panel token escribía en el equipo anterior.",
-    "🕘 Asistencia: las llegadas se veían con la hora del procesamiento en vez de la real, y el aviso de escáner caído volvía a ser falsa alarma."
+    "🔔 Activa los avisos al teléfono desde Configuración y revisa en qué equipos están dados de alta.",
+    "🧪 Botón de aviso de prueba: te llega solo a ti, para comprobar que funciona.",
+    "🔒 Solo recibes avisos de los módulos que tienes abiertos.",
+    "🕘 Fuera del horario de oficina no suenan: se acumulan y salen juntos al día siguiente.",
+    "📣 El aviso de un reporte firmado ahora dice quién lo firmó.",
+    "🐛 «Enviar aviso push» ya llega a los equipos: antes buscaba en una tabla vacía."
   ]
 }

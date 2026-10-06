@@ -4,6 +4,7 @@
 	import { auth } from '$lib/stores/auth.js';
 	import { api } from '$lib/api.js';
 	import { passkeySupported, registerPasskey, randomDeviceName } from '$lib/passkey.js';
+	import { estado as pushEstadoActual, activar as pushActivar, desactivar as pushDesactivar, dispositivos as pushDispositivosList, enviarPrueba as pushEnviarPrueba } from '$lib/push.js';
 
 	// --- Passkeys (estilo Field) ---
 	let pkSupported = $state(false);
@@ -33,6 +34,15 @@
 	let avSelected = $state([]);
 	let avBusy = $state(false);
 	let avMsg = $state('');
+
+	// Notificaciones push de ESTE equipo. Lo que decide si suenan está en el
+	// service worker y en el permiso del navegador; lo que decide si suenan
+	// tiene sentido está en el panel (WorkersAdmon > Avisos).
+	let pushEstado = $state(null);
+	let pushDispositivos = $state([]);
+	let pushMsg = $state('');
+	let pushErr = $state('');
+	let pushBusy = $state(false);
 	let avErr = $state('');
 
 	// --- Dispositivo ---
@@ -74,6 +84,7 @@
 		}
 		pkSupported = passkeySupported();
 		if (pkSupported) loadKeys();
+		loadPush();
 		try {
 			const raw = localStorage.getItem('admon_user');
 			const u = raw ? JSON.parse(raw) : null;
@@ -110,6 +121,63 @@
 			await deferredPrompt.userChoice.catch(() => {});
 			deferredPrompt = null;
 			canInstall = false;
+		}
+	}
+
+	// --- Notificaciones push ---
+
+	async function loadPush() {
+		try {
+			pushEstado = await pushEstadoActual();
+			pushDispositivos = pushEstado?.suscrito ? await pushDispositivosList() : [];
+		} catch {
+			pushEstado = null;
+		}
+	}
+
+	async function activarPush() {
+		pushMsg = '';
+		pushErr = '';
+		pushBusy = true;
+		// ESTA función es el gesto del usuario: en iOS `requestPermission()`
+		// solo muestra el diálogo si se llama desde un manejador de click. Si se
+		// moviera a un onMount, el botón no haría nada y parecería que la app
+		// está rota.
+		const r = await pushActivar();
+		pushBusy = false;
+		if (!r.ok) {
+			pushErr = r.motivo;
+			await loadPush();
+			return;
+		}
+		pushMsg = '✅ Listo: vas a recibir los avisos en este equipo.';
+		await loadPush();
+	}
+
+	async function desactivarPush() {
+		pushMsg = '';
+		pushErr = '';
+		pushBusy = true;
+		const r = await pushDesactivar();
+		pushBusy = false;
+		if (!r.ok) {
+			pushErr = r.motivo;
+			return;
+		}
+		pushMsg = 'Avisos apagados en este equipo.';
+		await loadPush();
+	}
+
+	async function probarPush() {
+		pushMsg = '';
+		pushErr = '';
+		pushBusy = true;
+		const r = await pushEnviarPrueba();
+		pushBusy = false;
+		if (r.ok) {
+			pushMsg = `📬 ${r.detalle || 'Prueba enviada.'}`;
+		} else {
+			pushErr = r.detalle || 'No se pudo enviar la prueba.';
 		}
 	}
 
@@ -247,6 +315,76 @@
 			<p class="hint">En iPhone: toca <strong>Compartir</strong> (cuadro con ↑) → <strong>Añadir a pantalla de inicio</strong>. Solo instalada llegan las notificaciones.</p>
 		{:else}
 			<p class="hint">Desde el menú del navegador usa <strong>Instalar app / Añadir a pantalla de inicio</strong> para notificaciones push.</p>
+		{/if}
+	</div>
+
+	<div class="card">
+		<div class="card-title">🔔 Avisos en este equipo</div>
+
+		{#if !pushEstado}
+			<p class="hint">Este navegador no soporta notificaciones push.</p>
+		{:else if !pushEstado.listo}
+			<!-- El motivo importa: en iOS el permiso PIDE y después falla, y sin
+			     explicar cuál de las tres condiciones falta el botón parece roto. -->
+			<p class="hint">{pushEstado.motivo}</p>
+			{#if pushEstado.ios && !pushEstado.instalada}
+				<p class="hint">Compártela desde Safari y el ícono aparece en tu pantalla de inicio.</p>
+			{/if}
+		{:else if pushEstado.suscrito}
+			<p class="hint">✅ Las notificaciones están activas en este equipo.</p>
+
+			{#if pushDispositivos.length}
+				<div class="field">
+					<div class="hint"><strong>Equipos registrados:</strong></div>
+					{#each pushDispositivos as d (d.id)}
+						<div class="hint">• {d.plataforma} — desde {d.creado}</div>
+					{/each}
+				</div>
+			{/if}
+
+			{#if pushErr}
+				<div class="msg err">{pushErr}</div>
+			{/if}
+			{#if pushMsg}
+				<div class="msg ok">{pushMsg}</div>
+			{/if}
+
+			<button class="btn btn-secondary btn-block" on:click={desactivarPush} disabled={pushBusy}>
+				{pushBusy ? 'Un momento...' : '🔕 Apagar en este equipo'}
+			</button>
+			<button class="btn btn-block" on:click={probarPush} disabled={pushBusy}>
+				{pushBusy ? 'Un momento...' : '🧪 Enviar prueba'}
+			</button>
+		{:else}
+			<p class="hint">
+				Te avisamos cuando se firme un reporte tuyo, falte el kilometraje de tu
+				vehículo, se registre un ticket OxxoGas, o una cotización se firme o se
+				 facture. Solo los avisos de los módulos que tienes abiertos.
+			</p>
+			{#if pushEstado.permiso === 'denied'}
+				<p class="hint">
+					El navegador no deja preguntar. Hay que reactivarlo en los ajustes del
+					sitio (en iPhone: Ajustes → Notificaciones → Admon).
+				</p>
+			{:else if pushEstado.permiso === 'granted'}
+				<p class="hint">Concedido ✓. Falta registrar este equipo.</p>
+			{:else}
+				<p class="hint">
+					El permiso se concede con el botón de abajo. En iPhone solo lo pregunta
+					desde un toque, nunca al abrir la app.
+				</p>
+			{/if}
+
+			{#if pushErr}
+				<div class="msg err">{pushErr}</div>
+			{/if}
+			{#if pushMsg}
+				<div class="msg ok">{pushMsg}</div>
+			{/if}
+
+			<button class="btn btn-primary btn-block" on:click={activarPush} disabled={pushBusy}>
+				{pushBusy ? 'Un momento...' : '🔔 Activar notificaciones'}
+			</button>
 		{/if}
 	</div>
 

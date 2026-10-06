@@ -135,6 +135,45 @@ Convención al aplicar (no hay runner todavía):
 2. Registrarlo: `INSERT INTO schema_migrations (version) VALUES ('NNNN_nombre.sql')`.
 3. Pruebas primero (`ECCSA_Admon_Pruebas`), después producción.
 
+## Avisos push (los avisos al teléfono)
+
+Cuatro endpoints en `api/main.py` (`vapid-public-key`, `subscribe`,
+`unsubscribe`, `suscripciones`, `prueba`), el cliente en `src/lib/push.js`, los
+handlers `push`/`notificationclick` en `public/sw.js` y la tarjeta de
+Configuración.
+
+**Quien decide los avisos NO es esta app**: los detecta `notif_dispatch.py` en
+WorkersAdmon (`cron_avisos_push.py`), que es el único que escribe y borra filas de
+la cola. Aquí solo se guarda de qué dispositivo se trata. La tabla de
+suscripciones es `HUB_PushSuscripciones`, creada por la migración
+**`0056_avisos_push.sql` del repo `hector1516/WorkersAdmon`**, NO en el
+`migrations/` de este repo: la comparten el worker y las dos apps, y
+`schema_migrations` es un registro único para las tres.
+
+Reglas que ya se aprendieron (están razonadas en Mailbox, que es la app que
+funciona en iOS):
+
+1. **Las suscripciones van en `HUB_PushSuscripciones`, no en
+   `HUB_PushSubscriptions`.** La vieja no tiene columna `App`, así que una
+   suscripción de Admon es indistinguible de una de Field y los avisos de una app
+   aparecerían dentro del service worker de la otra.
+2. **La privada VAPID va como base64url de los 32 bytes CRUDOS.** Con una PEM o
+   un DER, `pywebpush` falla siempre y el error no dice por qué.
+   `_normalizar_vapid_privada()` la convierte sola.
+3. **iOS tiene tres condiciones que el navegador no avisa** (16.4+, PWA instalada
+   y permiso pedido desde un gesto). Ninguna da un error legible, así que
+   `src/lib/push.js` ENVUELVE la API y devuelve `{ok, motivo}` para que la
+   pantalla pueda decir qué hacer. En iOS el permiso nunca llega a `'denied'`: se
+   queda en `'default'`, por eso se exige ver `'granted'`.
+4. **Al tocar la notificación se enfoca la pestaña que ya existe**, no se abre una
+   ventana nueva: en iOS eso deja la PWA en blanco. Por eso el SW manda
+   `postMessage({type:'ABRIR_RUTA'})` y **`App.svelte` tiene que escucharlo**
+   (`onMensajeSW`): si nadie escucha, el toque no hace nada.
+5. **`badge` cambia de significado según la plataforma**: en iOS es un NÚMERO y en
+   Android la URL de una imagen. El servidor manda `badge_count` y el SW decide.
+6. **El botón de prueba va solo a quien lo apretó** (por `IdUsuario`), nunca en
+   broadcast: probar el teléfono propio no puede ser un aviso a media empresa.
+
 ## Comandos
 
 ```bash
