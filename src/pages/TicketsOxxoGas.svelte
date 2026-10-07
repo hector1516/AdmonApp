@@ -19,6 +19,8 @@
 	// Mismo estilo/umbral que la vista "Vales OxxoGas" del HUB: rojo si < $2,000.
 	let saldo = $state(null);       // number | null (null = sin dato/oculto)
 	let saldoFecha = $state('');
+	let valesRestantes = $state(null);   // number | null (null = sin dato)
+	let montoVale = $state(500);   // monto por vale que reporta el API
 	const UMBRAL_SALDO = 2000;
 
 	function fmtSaldo(v) {
@@ -83,6 +85,10 @@
 				saldo = s.saldo;
 				saldoFecha = s.fecha || 'Nunca';
 			}
+			if (s && typeof s.vales_restantes === 'number') {
+				valesRestantes = s.vales_restantes;
+				if (typeof s.monto_por_vale === 'number') montoVale = s.monto_por_vale;
+			}
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : e.message || 'No se pudo cargar.';
 		} finally {
@@ -113,12 +119,21 @@
 
 	{#if saldo !== null}
 		{@const bajo = saldo < UMBRAL_SALDO}
+		{@const sinVales = valesRestantes !== null && valesRestantes < 1}
 		<div class="saldo-card" class:bajo>
 			<div class="saldo-label">💰 Saldo Go Vale</div>
 			<div class="saldo-num" class:rojo={bajo} class:verde={!bajo}>${fmtSaldo(saldo)}</div>
 			<div class="saldo-alerta" class:rojo={bajo} class:verde={!bajo}>
 				{bajo ? '⚠️ Saldo bajo — recarga pronto' : '✅ Saldo disponible para generar vales'}
 			</div>
+			{#if valesRestantes !== null}
+				<div class="vales-estimado" class:sin-vales={sinVales}>
+					<span class="vales-num">
+						{sinVales ? '⚠️ No alcanza para 1 vale' : `🎫 ~${valesRestantes} vale${valesRestantes === 1 ? '' : 's'}`}
+					</span>
+					<span class="vales-nota">aprox. a ${fmtSaldo(montoVale)} c/u</span>
+				</div>
+			{/if}
 			<div class="saldo-meta">
 				<span>🔄 Revisado: {saldoFecha}</span>
 				<span>Umbral alerta: ${UMBRAL_SALDO.toLocaleString('es-MX')}</span>
@@ -207,4 +222,13 @@
 	.saldo-alerta { font-size: .95rem; font-weight: 600; margin-top: 2px; color: #FEE2E2; }
 	.saldo-alerta.verde { color: #DCFCE7; }
 	.saldo-meta { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.12); color: #94a3b8; font-size: .78rem; }
+
+	/* Estimado de vales = saldo // monto por vale. Va con su propia línea para
+	   que se lea rápido ("¿cuántos vales me alcanza?") sin mezclarlo con el
+	   saldo, que es el dato real. */
+	.vales-estimado { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12); }
+	.vales-num { font-size: 1rem; font-weight: 700; color: #FDE68A; }
+	.vales-estimado.sin-vales { background: rgba(239,68,68,.16); border-color: rgba(239,68,68,.5); }
+	.vales-estimado.sin-vales .vales-num { color: #FCA5A5; }
+	.vales-nota { font-size: .74rem; color: #94a3b8; }
 </style>

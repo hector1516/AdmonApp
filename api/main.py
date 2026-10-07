@@ -5734,6 +5734,13 @@ def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+# Face Value típico de un vale Go Vale de gasolina (monto fijo). Solo se usa para
+# el estimado de "vales restantes" = saldo // MONTO_POR_VALE; el saldo real es el
+# de la tarjeta. Si Go Vale cambia el monto, se ajusta aquí (y el front lo toma
+# del campo `monto_por_vale` del endpoint, no lo tiene cableado).
+MONTO_POR_VALE = 500.0
+
+
 @app.get("/api/tickets-oxxogas/saldo")
 def tickets_oxxogas_saldo(current_user: dict = Depends(get_current_user)):
     """Saldo de la cuenta Go Vale (HUB_Config 'govale_saldo'/'govale_saldo_fecha').
@@ -5742,7 +5749,13 @@ def tickets_oxxogas_saldo(current_user: dict = Depends(get_current_user)):
     ~5 min con login en govale-digital.oxxogas.com; aquí solo se lee para
     mostrarlo en la tarjeta del módulo (mismo estilo/umbral $2,000 que el HUB).
     Se registra ANTES de la ruta con {ticket_id:int} para que el orden de rutas
-    de FastAPI resuelva 'saldo' como literal."""
+    de FastAPI resuelva 'saldo' como literal.
+
+    `vales_restantes` es un aproximado: divide el saldo entre el monto típico de
+    un vale (MONTO_POR_VALE). Go Vale emite vales de monto fijo (500 por
+    omisión), así que el estimado sirve para planear recargas, no para
+    contabilidad exacta. Va en el API (no en el front) para que el cálculo
+    quede en un solo lugar si más adelante el monto deja de ser fijo."""
     _require_vales_oxxogas(current_user)
     conn = get_connection()
     try:
@@ -5757,10 +5770,14 @@ def tickets_oxxogas_saldo(current_user: dict = Depends(get_current_user)):
             saldo = float(saldo_raw)
         except (TypeError, ValueError):
             saldo = None
+        vales = (saldo // MONTO_POR_VALE) if saldo is not None else None
         return {
             "saldo": saldo,
             "fecha": (cfg.get("govale_saldo_fecha") or "").strip() or None,
             "umbral": 2000.0,
+            "monto_por_vale": MONTO_POR_VALE,
+            # null si no hay saldo conocido; 0 si el saldo ya no alcanza para uno.
+            "vales_restantes": int(vales) if vales is not None else None,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
