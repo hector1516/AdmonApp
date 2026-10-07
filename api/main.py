@@ -5660,11 +5660,15 @@ def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
             SELECT TOP 300
                 T.Id, T.FolioTicket, T.FechaRegistro, T.Estacion, T.Descripcion,
                 CASE WHEN T.ImagenTicket IS NOT NULL THEN 1 ELSE 0 END AS TieneFoto,
-                C.Cliente, A.MarcaModelo, A.Placas, U.Nombre AS Capturo
+                C.Cliente, A.MarcaModelo, A.Placas, U.Nombre AS Capturo,
+                S.FechaSolicitud AS ValeSolicitud
             FROM HUB_OxxoGasTickets T
             LEFT JOIN clientes C ON C.IdCliente = T.IdCliente
             LEFT JOIN HUB_Automoviles A ON A.Id = T.IdVehiculo
             LEFT JOIN HUB_Users U ON U.Id = T.IdUsuario
+            LEFT JOIN HUB_SolicitudVales S
+                   ON S.Id = T.IdSolicitudVale
+                  AND S.IdSolicitante = T.IdUsuario
             ORDER BY T.FechaRegistro DESC
         """)
         tickets = cursor.fetchall()
@@ -5700,6 +5704,14 @@ def tickets_oxxogas_list(current_user: dict = Depends(get_current_user)):
                 "id": t["Id"],
                 "folio": folio,
                 "fecha": t["FechaRegistro"].isoformat() if t["FechaRegistro"] else None,
+                # Fecha en que se SOLICITÓ el vale asociado al ticket. Es la
+                # fecha que interesa al usuario: el vale se pide antes de
+                # cargar y el ticket se captura después (a veces días después —
+                # p.ej. el #60: vale del 29/09, ticket del 06/10), así que
+                # FechaRegistro no representa cuándo se surtió el combustible.
+                # El JOIN exige que el solicitante sea el mismo usuario que
+                # capturó el ticket; si no, queda null y el front usa `fecha`.
+                "fecha_vale": t["ValeSolicitud"].isoformat() if t["ValeSolicitud"] else None,
                 "estacion": estacion or None,          # null → front muestra "Pendiente"
                 "descripcion": t["Descripcion"] or "",
                 "tiene_foto": bool(t["TieneFoto"]),

@@ -44,6 +44,18 @@
 		return m != null ? `$${Number(m).toFixed(2)}` : null;
 	}
 
+	// ── Qué fecha mostrar ────────────────────────────────────────────────────
+	// El vale se PIDE antes de cargar y el ticket se CAPTURA después, a veces
+	// días después (el #60: vale del 29/09, ticket del 06/10). La fecha que
+	// interesa es la del vale; la del ticket solo se usa como respaldo cuando
+	// el ticket no tiene vale enlazado (16 de 26 al momento de escribir esto).
+	function fechaBase() {
+		return t?.fecha_vale || t?.fecha || null;
+	}
+	function esFechaVale() {
+		return !!(t && t.fecha_vale);
+	}
+
 	// ── Zoom de la foto del ticket ──────────────────────────────────────────
 	// El recuadro de la imagen es pequeño en móvil y el folio del vale no se
 	// lee. Un lightbox a pantalla completa con zoom + arrastre lo resuelve
@@ -180,7 +192,7 @@
 		<button class="btn btn-sm btn-secondary" onclick={() => navigate('/tickets_oxxogas')} title="Volver al listado">⬅️</button>
 		<h1>🎫 Ticket {t ? `#${t.folio}` : ''}</h1>
 		<div style="flex:1"></div>
-		{#if t}<span class="fecha-head">🕐 {fmtFecha(t.fecha)}</span>{/if}
+		{#if t}<span class="fecha-head">🕐 {fmtFecha(fechaBase())}{#if esFechaVale()}<i>del vale</i>{/if}</span>{/if}
 	</div>
 
 	{#if loading}
@@ -226,7 +238,14 @@
 				-->
 				<div class="info-box">
 					<div class="info-label">🎫 Datos del ticket</div>
-					<div class="info-line"><span>🕐 Fecha y hora</span><strong>{fmtFecha(t.fecha)}</strong></div>
+					<div class="info-line">
+						<span>🕐 Fecha y hora</span>
+						{#if esFechaVale()}
+							<strong>{fmtFecha(fechaBase())}<i class="tag-vale">del vale</i></strong>
+						{:else}
+							<strong>{fmtFecha(fechaBase())}<i class="tag-ticket">del ticket</i></strong>
+						{/if}
+					</div>
 					<div class="info-line"><span>👤 Nombre</span><strong>{t.capturo || '—'}</strong></div>
 					<div class="info-line">
 						<span>💰 Cantidad</span>
@@ -365,6 +384,36 @@
 
 	/* Cantidad sin vale enlazado todavía. Idem: gana a `.info-line span`. */
 	.info-line .pend-inline { color: #fbbf24; font-size: 0.85rem; flex-shrink: 0; }
+
+	/* Etiqueta que aclara de qué fecha se trata: la del vale (la del
+	   combustible) o, si no hay vale enlazado, la del ticket. Se pone como
+	   <i> para no heredar el estilo del <strong> ni del <span> del label. */
+	i.tag-vale,
+	i.tag-ticket {
+		font-style: normal;
+		font-size: 0.68rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.4px;
+		margin-left: 0.45rem;
+		padding: 0.1rem 0.4rem;
+		border-radius: 999px;
+		white-space: nowrap;
+		vertical-align: middle;
+	}
+	i.tag-vale { color: #ffae00; background: rgba(255, 174, 0, 0.14); border: 1px solid rgba(255, 174, 0, 0.35); }
+	i.tag-ticket { color: #94a3b8; background: rgba(148, 163, 184, 0.12); border: 1px solid rgba(148, 163, 184, 0.28); }
+
+	/* Mismo distintivo, versión compacta, en la burbuja del header. */
+	.fecha-head i {
+		font-style: normal;
+		font-size: 0.62rem;
+		font-weight: 800;
+		text-transform: uppercase;
+		letter-spacing: 0.4px;
+		color: #ffae00;
+		margin-left: 0.35rem;
+	}
 
 	.pend-row { font-size: 0.85rem; color: #fbbf24; background: rgba(251, 191, 36, 0.08); border: 1px dashed rgba(251, 191, 36, 0.35); border-radius: 8px; padding: 0.5rem 0.65rem; margin: 0.3rem 0; }
 	.btn-back { width: 100%; }
