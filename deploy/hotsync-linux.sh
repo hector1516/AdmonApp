@@ -43,6 +43,27 @@ run() {
 }
 say() { echo "[hotsync] $*"; }
 
+# ── 0-bis. ¿Administra Arcane este contenedor? ───────────────────────────────
+# hotsync copia archivos DENTRO del contenedor con 'docker cp' y reinicia. Eso
+# deja el contenedor distinto de su imagen sin que nadie lo sepa: la próxima vez
+# que Arcane lo recree (Update, restart, redeploy) se pierden esos cambios y la
+# app vuelve a una versión vieja sin explicación.
+#
+# Si Arcane es el dueño, hotsync no aplica. Se delega a rebuild, que construye
+# la imagen, la publica en GHCR y deja que el operador aplique el Update.
+if [ "$DRY" = "0" ] && docker ps >/dev/null 2>&1; then
+  COMPOSE_PROJECT=$(docker inspect \
+    -f '{{ index .Config.Labels "com.docker.compose.project" }}' \
+    "$CONTAINER" 2>/dev/null || echo "")
+  if [ -n "$COMPOSE_PROJECT" ]; then
+    say "ATENCION: '$CONTAINER' lo administra Arcane (project=$COMPOSE_PROJECT)."
+    say "           hotsync no sirve: los cambios se perderian en el proximo Update."
+    say "           Delego en rebuild-linux.sh (construye, publica y no recrea)."
+    say ""
+    exec bash "$ROOT/deploy/rebuild-linux.sh"
+  fi
+fi
+
 # ── 0. Precondiciones ────────────────────────────────────────────────────────
 if [ "$DRY" = "0" ]; then
   # Primero: ¿responde docker? Sin esto, un runner sin permisos reporta "el
