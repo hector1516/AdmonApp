@@ -27,7 +27,7 @@
 set -euo pipefail
 
 CONTAINER=admon
-IMAGE=hub-admon:latest
+IMAGE=ghcr.io/hector1516/admon:latest
 PORT=8103
 HEALTH_URL="http://localhost:${PORT}/health"
 NODE_IMAGE="node:20-alpine"
@@ -102,6 +102,21 @@ fi
 # ── 3. Construir la imagen ───────────────────────────────────────────────────
 say "3/5 construyendo la imagen ${IMAGE} (esto tarda varios minutos)"
 run docker build -t "$IMAGE" "$STAGE"
+
+# ── 3b. Publicar en el registry ──────────────────────────────────────────────
+# Arcane (y cualquier otro Docker) detectan actualizaciones comparando el digest
+# local contra el del registry. Si esto no corre, la imagen queda solo en este
+# servidor y nadie externo se entera de que hay una version nueva.
+# Sin GHCR_TOKEN no se rompe nada: se avisa y se sigue.
+if [ "${GHCR_TOKEN:-}" != "" ]; then
+  say "3b/5 publicando ${IMAGE} en ghcr.io"
+  printf '%s' "$GHCR_TOKEN" \
+    | docker login ghcr.io -u "${GHCR_USER:-hector1516}" --password-stdin >/dev/null
+  run docker push "$IMAGE"
+  docker logout ghcr.io >/dev/null 2>&1 || true
+else
+  say "3b/5 sin GHCR_TOKEN: la imagen queda solo local. Arcane no vera updates."
+fi
 
 # ── 4. Recrear el contenedor con la configuración del servidor ───────────────
 say "4/5 recreando el contenedor con ${RUN_APP} (lee /opt/apps/${CONTAINER}/app.conf)"

@@ -199,4 +199,8 @@ jobs:
 
       - name: Rebuild
         if: needs.gate.outputs.modo == 'rebuild'
+        env:
+          # rebuild-linux.sh publica la imagen en GHCR con este token. Sin el,
+          # la imagen queda solo en el server y Arcane nunca ve actualizaciones.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash deploy/rebuild-linux.sh
