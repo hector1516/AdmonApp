@@ -1,6 +1,30 @@
-# Admon — backend FastAPI (fase 1: solo API).
-# El frontend Svelte se integra después (fase 2: build Node + servir dist/).
-# No requiere Node/npm: evita el fallo "npm: command not found".
+# ─────────────────────────────────────────────────────────────────────────────
+# Etapa 1 — frontend Svelte (Vite) -> dist/
+#
+# ANTES esta etapa no existía: el `npm run build` se ejecutaba en el servidor
+# antes de `docker build`, y por eso el CI de admon necesitaba un runner propio
+# sobre la máquina — que competía por CPU y RAM con las apps que ahí corren.
+# Con esta etapa la imagen se arma completa en ubuntu-latest y el servidor
+# solamente la baja.
+#
+# node:20-alpine es el mismo que usaba el script del servidor.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# Primero solo los manifiestos: si cambia package-lock.json, esta capa se
+# invalida sola y npm ci corre de nuevo; el resto del contexto no la toca.
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+RUN npm run build
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Etapa 2 — runtime. Backend FastAPI. No lleva Node: la imagen final no carga
+# npm ni el contexto del frontend.
+# ─────────────────────────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -15,8 +39,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY api/ ./api/
-# Frontend compilado localmente (npm run build) -> servido por FastAPI en "/"
-COPY dist/ ./dist/
+# Frontend compilado por la etapa de arriba (npm run build) -> lo sirve FastAPI en "/"
+COPY --from=build /app/dist ./dist/
 # Versión del shell común (ECCSA-Shell): la lee GET /api/shell/state para el
 # banner. Es un archivo generado por tools/sync_shell.py en la app.
 COPY ECCSA_SHELL_VERSION ./ECCSA_SHELL_VERSION

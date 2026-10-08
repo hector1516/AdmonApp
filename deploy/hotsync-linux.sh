@@ -11,7 +11,7 @@
 #
 # Cuándo se usa: cuando el push NO tocó Dockerfile, requirements.txt,
 # api/requirements.txt (lo decide .github/workflows/deploy.yml). Si los toca,
-# el workflow llama a deploy/rebuild-linux.sh, que reconstruye la imagen.
+# el workflow llama a deploy/rebuild-linux.sh, que baja la imagen nueva.
 #
 # La diferencia con la versión Windows (deploy/hotsync.sh): esta corre en el
 # servidor Debian WebbApps (10.188.141.17), que es donde está la app que usan
@@ -58,7 +58,7 @@ if [ "$DRY" = "0" ] && docker ps >/dev/null 2>&1; then
   if [ -n "$COMPOSE_PROJECT" ]; then
     say "ATENCION: '$CONTAINER' lo administra Arcane (project=$COMPOSE_PROJECT)."
     say "           hotsync no sirve: los cambios se perderian en el proximo Update."
-    say "           Delego en rebuild-linux.sh (construye, publica y no recrea)."
+    say "           Delego en rebuild-linux.sh (baja la imagen y no recrea)."
     say ""
     exec bash "$ROOT/deploy/rebuild-linux.sh"
   fi
