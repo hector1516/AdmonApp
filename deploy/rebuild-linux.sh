@@ -27,7 +27,7 @@
 set -euo pipefail
 
 CONTAINER=admon
-IMAGE=hub-admon:latest
+IMAGE=ghcr.io/hector1516/admon:latest
 PORT=8103
 HEALTH_URL="http://localhost:${PORT}/health"
 NODE_IMAGE="node:20-alpine"
@@ -103,7 +103,44 @@ fi
 say "3/5 construyendo la imagen ${IMAGE} (esto tarda varios minutos)"
 run docker build -t "$IMAGE" "$STAGE"
 
-# ── 4. Recrear el contenedor con la configuración del servidor ───────────────
+# ── 3b. Publicar en el registry ──────────────────────────────────────────────
+# Arcane (y cualquier otro Docker) detectan actualizaciones comparando el digest
+# local contra el del registry. Si esto no corre, la imagen queda solo en este
+# servidor y nadie externo se entera de que hay una version nueva.
+# Sin GHCR_TOKEN no se rompe nada: se avisa y se sigue.
+if [ "${GHCR_TOKEN:-}" != "" ]; then
+  say "3b/5 publicando ${IMAGE} en ghcr.io"
+  printf '%s' "$GHCR_TOKEN" \
+    | docker login ghcr.io -u "${GHCR_USER:-hector1516}" --password-stdin >/dev/null
+  run docker push "$IMAGE"
+  docker logout ghcr.io >/dev/null 2>&1 || true
+else
+  say "3b/5 sin GHCR_TOKEN: la imagen queda solo local. Arcane no vera updates."
+fi
+
+# ── 4. Despliegue ────────────────────────────────────────────────────────────
+# admon es un Project de Arcane (docker.ecc-sa.com.mx) y Arcane es el dueño del
+# contenedor: compara el digest local contra el del registry, ve que hay uno
+# nuevo, y el operador le da "Update" desde la UI.
+#
+# Que este script lo recreara lo ROMPERÍA: run_app.sh hace `docker rm admon` y
+# el project de Arcane se queda sin contenedor. Por eso solo se recrea si la app
+# todavía NO está administrada por Arcane.
+COMPOSE_PROJECT=""
+if [ "$DRY" = "0" ]; then
+  COMPOSE_PROJECT=$(docker inspect \
+    -f '{{ index .Config.Labels "com.docker.compose.project" }}' \
+    "$CONTAINER" 2>/dev/null || echo "")
+fi
+
+if [ -n "$COMPOSE_PROJECT" ]; then
+  say "4/5 '$CONTAINER' lo administra Arcane (project=$COMPOSE_PROJECT): no lo recreo."
+  say "    La imagen nueva ya está publicada en el registry."
+  say "    Para aplicarla: Arcane → Projects → $CONTAINER → Updates → Update."
+  say "5/5 no verifico salud: el contenedor sigue corriendo la imagen anterior."
+  exit 0
+fi
+
 say "4/5 recreando el contenedor con ${RUN_APP} (lee /opt/apps/${CONTAINER}/app.conf)"
 run_sudo "$RUN_APP" "$CONTAINER"
 
