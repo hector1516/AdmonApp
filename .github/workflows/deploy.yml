@@ -103,8 +103,12 @@ jobs:
           # gh lo necesita para la API de compare; sin esto responde con un
           # error de ayuda y rc=4, y el gate no puede leer la lista de cambios.
           GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.event.after }}
+          # En un push estos dos vienen del evento. En workflow_dispatch vienen vacíos
+          # (no hay before/after), y comparar "..." no dice nada: se cae al
+          # merge-base contra master, que es lo que uno quiere al pedir
+          # "reconstruir ahora" a mano.
+          BEFORE: ${{ github.event.before || format('refs/heads/{0}', github.event.repository.default_branch) }}
+          AFTER: ${{ github.event.after || github.sha }}
         run: |
           set -uo pipefail
 
@@ -117,8 +121,14 @@ jobs:
           diag=""
 
           echo "── API de compare"
-          api_names=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" --jq '.files[].filename' 2>&1)
-          rc=$?
+          # El runner ejecuta este paso con `bash -e`, así que una llamada
+          # fallida aborta el paso ANTES de llegar al respaldo por git diff.
+          # Por eso el código de salida se captura en rc_api y el `|| rc_api=$?`
+          # neutraliza el errexit. Antes, un fallo de `gh` (o un compare con
+          # BEFORE/AFTER vacíos en workflow_dispatch) mataba el gate entero.
+          rc_api=0
+          api_names=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" --jq '.files[].filename' 2>&1) || rc_api=$?
+          rc=$rc_api
           api_names=$(printf '%s\n' "$api_names" | grep -vE '^(gh:|To use GitHub CLI|error:|fatal:)' | grep -v '^[[:space:]]*$' || true)
           diag="api rc=$rc archivos=$(printf '%s\n' "$api_names" | grep -c . || true)"
 
