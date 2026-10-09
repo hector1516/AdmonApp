@@ -79,23 +79,19 @@ falso, porque GitHub reportaba `success` y la app no cambiaba.
 
 `deploy.yml` dispara en cada push a `master`:
 
-1. El **gate** corre en `ubuntu-latest` (bash): compara contra el push anterior
-   con la API de GitHub y decide el modo. Que no dependa del runner es
-   deliberado: si el gate necesita un runner, no puede avisar que falta.
-2. El **deploy** corre en el runner `WebbApps-Runner` (Linux, etiqueta
-   `admon-deploy`, servicio systemd `actions-runner-admonapp`). Se pide esa
-   etiqueta y no `self-hosted` porque en este repo todavía hay un runner
-   Windows registrado y con `self-hosted` el job caería ahí.
+1. `build-image` corre en `ubuntu-latest` y **siempre** construye y publica la
+   imagen en `ghcr.io/hector1516/admon` (`:latest` + `:sha`).
+2. `deploy` corre en el runner `WebbApps-Runner` (Linux, etiqueta
+   `admon-deploy`, servicio systemd `actions-runner-admonapp`) y solo **baja**
+   la imagen (`deploy/rebuild-linux.sh`). No recrea el contenedor: lo administra
+   Arcane. Se pide esa etiqueta y no `self-hosted` porque en este repo todavía
+   hay un runner Windows registrado y con `self-hosted` el job caería ahí.
 
-Modos:
-
-- **hotsync** — no cambió nada de la imagen: compila el frontend en un
-  contenedor `node:20-alpine` descartable y copia `dist/` y `api/` al
-  contenedor que ya corre, luego lo reinicia. ~2 min.
-  `deploy/hotsync-linux.sh` (tiene `--dry-run`).
-- **rebuild** — cambió `Dockerfile`, `requirements.txt` o `api/requirements.txt`:
-  compila el front, arma el contexto, `docker build` y recrea el contenedor con
-  `/opt/apps/_lib/run_app.sh`. ~4 min. `deploy/rebuild-linux.sh`.
+El único paso que **aplica** el cambio es el **Update de Arcane**
+(`https://docker.ecc-sa.com.mx` → Projects → admon → Updates). Antes había un
+`gate` que elegía entre `hotsync` y `rebuild`; se retiró el 2026-10-08 porque con
+Arcane el hotsync no puede aplicar nada (copiar dentro del contenedor vivo se
+pierde en el próximo Update). Es el mismo cambio que se hizo en Field.
 
 **El host no tiene node instalado**: por eso el build del frontend va dentro
 de un contenedor, no en el host. El contenedor node corre con el usuario del

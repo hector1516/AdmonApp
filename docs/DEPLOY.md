@@ -10,23 +10,22 @@ Runbook de despliegue de `admon` (la PWA en `admon.ecc-sa.com.mx`). Repo: **hect
 - Config del contenedor: **`/opt/apps/admon/app.conf`** en el servidor, aplicada con
   `/opt/apps/_lib/run_app.sh`. Secretos en `/etc/admon.env` (root, 600). Nada de eso está en el repo.
 - Red `hub_default`. **El contenedor NO monta volúmenes**: el código entra a la imagen
-  durante el `docker build` (o por `docker cp` en el hotsync). Editar archivos dentro del
-  contenedor a mano es un error: el siguiente deploy lo pisa.
+  durante el `docker build`. Editar archivos dentro del contenedor a mano es un error: el
+  siguiente Update de Arcane lo pisa.
 
 ## Flujo canónico
 
 ```bash
-# en WebbApps (10.188.141.17), como root
-sudo /opt/apps/_lib/run_app.sh admon      # recrea el contenedor desde app.conf
+# en WebbApps (10.188.141.17): la CI publica la imagen y Arcane la aplica.
 docker logs -f admon
-
-# deploy rápido sin rebuild (equivale al hotsync del CI)
-sudo -u deploy bash deploy/hotsync-linux.sh
-sudo -u deploy bash deploy/hotsync-linux.sh --dry-run
 ```
 
-Normalmente no hace falta ninguno de los dos: **el deploy es automático** en
-cada push a `master` (ver abajo).
+**No usar** `/opt/apps/_lib/run_app.sh admon` ni `docker rm/restart` sobre el
+contenedor: lo administra Arcane y el Project quedaría roto (ver
+`ReglasUpdateAdmon.md`).
+
+El deploy de la CI **solo publica y baja la imagen**; el paso que aplica el
+cambio es el **Update de Arcane** en cada push a `master` (ver abajo).
 
 ## Tags de imagen
 
@@ -84,33 +83,22 @@ Commits: **locales hasta que se publiquen en AdmonApp**. No hacer force-push ni 
 
 ---
 
-## Deploy automático (desde 2026-09-27)
+## Deploy automático
 
-Ya no hace falta correr `build.ps1` a mano. Cada push a `master` dispara
-`.github/workflows/deploy.yml`, que decide entre dos caminos mirando **qué
-archivos** cambió:
+Ya no hace falta correr nada a mano. Cada push a `master` dispara
+`.github/workflows/deploy.yml`:
 
-| Modo | Cuándo | Qué hace | Tiempo |
-|---|---|---|---|
-| **hotsync** | No cambió `Dockerfile`, `requirements.txt` ni `api/requirements.txt` | Compila el frontend en un `node:20-alpine` **descartable** y copia `dist/` + `api/` al contenedor que ya corre, y lo reinicia (`deploy/hotsync-linux.sh`) | ~2 min |
-| **rebuild** | Cambió alguno de esos | `docker build` de `hub-admon:latest` y recreación del contenedor con `/opt/apps/_lib/run_app.sh` (`deploy/rebuild-linux.sh`) | ~4 min |
+1. `build-image` (ubuntu-latest) construye y publica la imagen en
+   `ghcr.io/hector1516/admon` (`:latest` + `:sha`). El servidor no compila.
+2. `deploy` (runner `admon-deploy` en WebbApps) corre `deploy/rebuild-linux.sh`,
+   que **solo baja la imagen** y avisa. No recrea el contenedor: lo administra
+   Arcane.
+3. Arcane → **Projects → admon → Updates → Update** aplica la imagen nueva.
 
-El hotsync **no reconstruye la imagen**: por eso compila dentro de un
-contenedor y no en el host (WebbApps no tiene node).
-
-Para verlo sin ejecutar nada:
-
-```bash
-bash deploy/hotsync-linux.sh --dry-run
-```
-
-El gate corre en `ubuntu-latest` y el deploy en el runner de WebbApps
-(`admon-deploy`). Antes el pipeline corría en un runner Windows del ServerVM
-con PowerShell, `C:\admon` y una tarea programada: daba `success` sin publicar
-nada, porque ese servidor dejó de servir la app.
-
-**El primer deploy con el workflow conviene vigilarlo**: antes todo era manual.
-Los dos caminos dicen en el log qué modo eligieron y por qué.
+Ya **no hay gate** que elija entre `hotsync` y `rebuild`: se retiró el
+2026-10-08 porque con Arcane el hotsync no puede aplicar nada (copiar dentro del
+contenedor vivo se perdería en el próximo Update). Todo push construye imagen,
+igual que en Field.
 
 ## Verificación
 
