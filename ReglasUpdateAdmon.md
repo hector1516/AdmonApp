@@ -27,7 +27,7 @@ construye la CI **en la nube** y Arcane es el único que administra el contenedo
 | Imagen | `ghcr.io/hector1516/admon` |
 | Repositorio | [hector1516/admon](https://github.com/hector1516/admon) |
 | Workflow | `.github/workflows/deploy.yml` |
-| Jobs | desbloquear → gate → build-image → deploy |
+| Jobs | desbloquear → build-image → deploy |
 | Puertos | 8103 → 8000 (uvicorn) |
 | Salud | GET /health (200) |
 | ¿Toca el servidor? | Sí |
@@ -100,6 +100,13 @@ liberó CPU y RAM de la máquina.
 
 El job `deploy` baja el tag **por sha** (`IMAGE_REF`), no `:latest`, para que dos
 builds en paralelo no se pisen. Es la única de las seis con este detalle.
+
+**Ya no tiene gate.** Hasta 2026-10-08 el workflow distinguía `hotsync` (solo
+`api/**` o `src/**`) de `rebuild`, y en el primer caso no aplicaba nada: con
+Arcane como dueño del contenedor, copiar dentro del contenedor vivo se pierde en
+el próximo Update, así que terminaba delegando en rebuild. Ahora **todo push
+construye y publica imagen** y el único que la aplica es el Update de Arcane.
+Mismo cambio que en Field (ver `ReglasUpdateField.md`).
 
 ---
 
