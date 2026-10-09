@@ -3,7 +3,7 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { header, actualizar, clienteNombre, clienteContactos } from '$lib/cotizacionesApi.js';
-	import { COLOR_LABEL } from '$lib/cotizaciones.js';
+	import { COLOR_LABEL, folioFmt } from '$lib/cotizaciones.js';
 
 	let { clave } = $props();
 
@@ -20,6 +20,7 @@
 	let msg = $state('');
 	let busy = $state(false);
 	let loading = $state(true);
+	let folio = $state(null);
 	let timer = null;
 
 	function tieneAcceso() {
@@ -42,6 +43,7 @@
 		}
 		try {
 			const h = await header(clave);
+			folio = h.folio ?? h.idLocal;
 			if ((h.color ?? 0) === 1 || (h.color ?? 0) === 2) {
 				error = '🔒 Cotización bloqueada (lista para facturar / facturada). Solo se puede cambiar el estatus.';
 			}
@@ -111,7 +113,7 @@
 <div class="page">
 	<div class="header">
 		<button class="btn btn-sm btn-secondary" on:click={() => navigate(`/cotizaciones/${clave}`)} title="Volver">⬅️</button>
-		<h1>✏️ Modificar</h1>
+		<h1>✏️ Modificar {folio != null ? folioFmt(folio) : ''}</h1>
 	</div>
 
 	{#if loading}

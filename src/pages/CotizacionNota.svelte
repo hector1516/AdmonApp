@@ -3,10 +3,12 @@
 	import { navigate } from '$lib/router.js';
 	import { auth } from '$lib/stores/auth.js';
 	import { header, guardarNota } from '$lib/cotizacionesApi.js';
+	import { folioFmt } from '$lib/cotizaciones.js';
 
 	let { clave } = $props();
 
 	let nota = $state('');
+	let folio = $state(null);
 	let loading = $state(true);
 	let error = $state('');
 	let msg = $state('');
@@ -33,6 +35,7 @@
 		try {
 			const h = await header(clave);
 			nota = h.nota || '';
+			folio = h.folio ?? h.idLocal;
 		} catch (e) {
 			error = e.message === 'Sesión expirada' ? e.message : `No se pudo cargar (${e.message || 'sin conexión'}).`;
 		} finally {
@@ -58,7 +61,7 @@
 <div class="page">
 	<div class="header">
 		<button class="btn btn-sm btn-secondary" on:click={() => navigate(`/cotizaciones/${clave}`)} title="Volver">⬅️</button>
-		<h1>📝 Nota interna</h1>
+		<h1>📝 Nota interna {folio != null ? folioFmt(folio) : ''}</h1>
 	</div>
 
 	{#if loading}
