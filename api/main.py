@@ -2821,8 +2821,11 @@ async def clientes_list(current_user: dict = Depends(get_current_user)):
     try:
         conn = get_connection()
         cursor = conn.cursor()
+        # OJO: `_CLIENTES_UNICOS` es una tabla derivada y SQL Server exige un
+        # alias (el `C`). Sin él la consulta truena con "Incorrect syntax near
+        # the keyword 'ORDER'" y este endpoint devolvía 500 siempre.
         cursor.execute("SELECT IdCliente, Cliente, Dias AS CondicionesPagoDias FROM "
-                       + _CLIENTES_UNICOS + " ORDER BY IdCliente ASC")
+                       + _CLIENTES_UNICOS + " C ORDER BY IdCliente ASC")
         rows = cursor.fetchall()
         conn.close()
         return [{"id_cliente": r[0], "nombre": r[1], "dias_pago": r[2]} for r in rows]
